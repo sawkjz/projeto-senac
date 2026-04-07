@@ -4,12 +4,13 @@ Sistema de votacao ao vivo para apresentacoes de equipes de Gastronomia, com ran
 
 ## Estrutura
 
-1. `client` - Frontend React (Vite)
-2. `server` - API Node/Express conectada ao Supabase
+1. `src` - Frontend React (Vite)
+2. `api` - API Node/Express para deploy unico na Vercel
+3. `sql` - Schema, seeds e migrations do Supabase
 
 ## Supabase
 
-Execute o SQL em `server/sql/schema.sql` no seu projeto Supabase. Ele cria:
+Execute o SQL em `sql/schema.sql` no seu projeto Supabase. Ele cria:
 
 - `app_users`, `auth_sessions`, `courses`, `teams`, `criteria`, `votes`, `vote_scores`
 - Funcoes `submit_vote` e `get_ranking`
@@ -18,19 +19,12 @@ Execute o SQL em `server/sql/schema.sql` no seu projeto Supabase. Ele cria:
 
 ## Configuracao
 
-1. Copie `server/.env.example` para `server/.env` e preencha `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`.
-2. Copie `client/.env.example` para `client/.env` e ajuste `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
+1. Configure um `.env` na raiz com `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_API_BASE_URL`, `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`.
+2. Em producao na Vercel, use `VITE_API_BASE_URL=/api`.
 
 ## Rodando localmente
 
 ```bash
-cd server
-npm install
-npm run dev
-```
-
-```bash
-cd client
 npm install
 npm run dev
 ```
