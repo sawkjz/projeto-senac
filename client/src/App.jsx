@@ -24,8 +24,50 @@ const heroHighlights = [
 const DEFAULT_PAGE = "landing";
 const GASTRONOMY_COURSE_NAME = "Gastronomia";
 const AUTH_TOKEN_KEY = "senac_auth_token";
+const TIME_CRITERION_TITLE = "Tempo";
+const TIMER_MIN_SECONDS = 3 * 60;
+const TIMER_MAX_SECONDS = 5 * 60;
+const TIMER_PENALTY_STEP_SECONDS = 30;
 
 const scoreLabels = (criterion) => `${criterion.min} - ${criterion.max}`;
+const isTimeCriterion = (criterion) => criterion.title === TIME_CRITERION_TITLE;
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const formatElapsedTime = (seconds) => {
+  const safeSeconds = Math.max(0, seconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+};
+const formatScoreValue = (value) =>
+  Number.isInteger(value) ? String(value) : value.toFixed(1);
+const getTimePenalty = (elapsedSeconds) => {
+  if (elapsedSeconds < TIMER_MIN_SECONDS) {
+    return Math.floor((TIMER_MIN_SECONDS - elapsedSeconds) / TIMER_PENALTY_STEP_SECONDS) * 0.1;
+  }
+
+  if (elapsedSeconds > TIMER_MAX_SECONDS) {
+    return Math.floor((elapsedSeconds - TIMER_MAX_SECONDS) / TIMER_PENALTY_STEP_SECONDS) * 0.1;
+  }
+
+  return 0;
+};
+const getTimeScore = (criterion, elapsedSeconds) =>
+  clamp(criterion.max - getTimePenalty(elapsedSeconds), criterion.min, criterion.max);
+const getTimerStatus = (elapsedSeconds) => {
+  if (elapsedSeconds === 0) {
+    return "Cronometro pronto para iniciar.";
+  }
+
+  if (elapsedSeconds < TIMER_MIN_SECONDS) {
+    return "Abaixo do tempo ideal.";
+  }
+
+  if (elapsedSeconds <= TIMER_MAX_SECONDS) {
+    return "Dentro da faixa sem penalidade.";
+  }
+
+  return "Acima do tempo ideal.";
+};
 
 const shellClass =
   "rounded-[20px] border border-[#7b5b33]/35 bg-[linear-gradient(160deg,rgba(255,248,230,0.95),rgba(245,232,206,0.96))] shadow-[0_14px_28px_rgba(61,40,16,0.14)]";
@@ -54,6 +96,9 @@ export default function App() {
   const [ranking, setRanking] = useState([]);
   const [rankingLoading, setRankingLoading] = useState(false);
   const [voteFeedback, setVoteFeedback] = useState("");
+  const [timerElapsedSeconds, setTimerElapsedSeconds] = useState(0);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [timerStarted, setTimerStarted] = useState(false);
   const positionsRef = useRef(new Map());
   const nodesRef = useRef(new Map());
 
@@ -173,10 +218,26 @@ export default function App() {
     if (!selectedTeamId) return;
     const nextScores = {};
     bootstrap.criteria.forEach((criterion) => {
-      nextScores[criterion.id] = criterion.min;
+      if (!isTimeCriterion(criterion)) {
+        nextScores[criterion.id] = criterion.min;
+      }
     });
     setScores(nextScores);
+    setTimerElapsedSeconds(0);
+    setTimerRunning(false);
+    setTimerStarted(false);
+    setVoteFeedback("");
   }, [selectedTeamId, bootstrap.criteria]);
+
+  useEffect(() => {
+    if (!timerRunning) return undefined;
+
+    const intervalId = window.setInterval(() => {
+      setTimerElapsedSeconds((current) => current + 1);
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [timerRunning]);
 
   useLayoutEffect(() => {
     const nodes = nodesRef.current;
@@ -297,9 +358,17 @@ export default function App() {
       return;
     }
 
-    const payload = Object.entries(scores).map(([criterionId, score]) => ({
-      criterionId,
-      score,
+    const timeCriterion = bootstrap.criteria.find(isTimeCriterion);
+    if (timeCriterion && !timerStarted) {
+      setVoteFeedback("Inicie o cronometro antes de salvar o voto.");
+      return;
+    }
+
+    const payload = bootstrap.criteria.map((criterion) => ({
+      criterionId: criterion.id,
+      score: isTimeCriterion(criterion)
+        ? Number(getTimeScore(criterion, timerElapsedSeconds).toFixed(1))
+        : scores[criterion.id] ?? criterion.min,
     }));
 
     try {
@@ -320,6 +389,7 @@ export default function App() {
       }
 
       setVoteFeedback("Voto registrado com sucesso.");
+      setTimerRunning(false);
       fetchRanking(selectedCourseId, true);
     } catch (error) {
       setVoteFeedback("Nao foi possivel registrar o voto.");
@@ -334,6 +404,12 @@ export default function App() {
     (team) => team.course_id === selectedCourseIdSafe,
   );
   const selectedTeam = courseTeams.find((team) => team.id === selectedTeamId);
+  const timeCriterion = bootstrap.criteria.find(isTimeCriterion);
+  const timePenalty = timeCriterion ? getTimePenalty(timerElapsedSeconds) : 0;
+  const timeScore = timeCriterion
+    ? getTimeScore(timeCriterion, timerElapsedSeconds)
+    : 0;
+  const timerStatus = getTimerStatus(timerElapsedSeconds);
 
   useEffect(() => {
     if (
@@ -628,6 +704,79 @@ export default function App() {
           </div>
 
           <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
+                  Cronometro
+                </p>
+                <h3 className="mt-1 text-base font-bold text-deep">
+                  Controle do tempo da apresentacao
+                </h3>
+                <p className="text-[0.85rem] leading-[1.45] text-ash">
+                  Entre 3:00 e 5:00 nao perde pontos. Fora dessa faixa, perde 0,1 a cada 30 segundos.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-[#8d673c]/25 bg-white/60 px-4 py-3 text-right shadow-soft">
+                <strong className="block text-[1.8rem] font-extrabold tracking-[0.06em] text-deep">
+                  {formatElapsedTime(timerElapsedSeconds)}
+                </strong>
+                <span className="text-[0.8rem] font-semibold text-ash">
+                  {timerStatus}
+                </span>
+              </div>
+            </div>
+            <div className="grid gap-2 rounded-2xl border border-[#8d673c]/20 bg-[#fffaf0]/80 p-3 md:grid-cols-[1fr_auto] md:items-center">
+              <div className="grid gap-1 text-[0.85rem] text-ash">
+                <span>
+                  Penalidade atual:{" "}
+                  <strong className="text-deep">
+                    {timePenalty > 0 ? `-${timePenalty.toFixed(1)}` : "sem perda"}
+                  </strong>
+                </span>
+                {timeCriterion && (
+                  <span>
+                    Nota de Tempo:{" "}
+                    <strong className="text-deep">
+                      {formatScoreValue(timeScore)} / {timeCriterion.max}
+                    </strong>
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className={actionClass}
+                  type="button"
+                  onClick={() => {
+                    setTimerStarted(true);
+                    setTimerRunning(true);
+                  }}
+                >
+                  {timerStarted ? "Retomar" : "Iniciar"}
+                </button>
+                <button
+                  className={secondaryActionClass}
+                  type="button"
+                  onClick={() => setTimerRunning(false)}
+                  disabled={!timerRunning}
+                >
+                  Pausar
+                </button>
+                <button
+                  className={secondaryActionClass}
+                  type="button"
+                  onClick={() => {
+                    setTimerElapsedSeconds(0);
+                    setTimerRunning(false);
+                    setTimerStarted(false);
+                  }}
+                >
+                  Reiniciar
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
             <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
               Avaliacao
             </p>
@@ -638,7 +787,7 @@ export default function App() {
             </h3>
             <form className="grid gap-3" onSubmit={handleVoteSubmit}>
               {bootstrap.criteria.map((criterion, index) => (
-                <label
+                <div
                   key={criterion.id}
                   className={`grid gap-1.5 font-semibold text-deep ${index > 0 ? "border-t border-deep/20 pt-2.5" : ""}`}
                 >
@@ -648,28 +797,47 @@ export default function App() {
                       {criterion.question}
                     </small>
                   </span>
-                  <div>
-                    <input
-                      className="w-full accent-sky"
-                      type="range"
-                      min={criterion.min}
-                      max={criterion.max}
-                      value={scores[criterion.id] ?? criterion.min}
-                      onChange={(event) =>
-                        setScores((current) => ({
-                          ...current,
-                          [criterion.id]: Number(event.target.value),
-                        }))
-                      }
-                    />
-                    <div className="flex items-center justify-between text-[0.76rem] text-ash">
-                      <span>{scoreLabels(criterion)}</span>
-                      <strong className="text-deep">
-                        {scores[criterion.id] ?? criterion.min}
-                      </strong>
+                  {isTimeCriterion(criterion) ? (
+                    <div className="rounded-2xl border border-[#8d673c]/20 bg-[#fffaf0]/80 p-3">
+                      <div className="flex items-center justify-between gap-3 text-[0.8rem] text-ash">
+                        <span>Faixa ideal: 03:00 ate 05:00</span>
+                        <strong className="text-deep">
+                          {formatScoreValue(timeScore)}
+                        </strong>
+                      </div>
+                      <div className="mt-2 h-[7px] overflow-hidden rounded-full bg-deep/10">
+                        <span
+                          className="block h-full bg-bar-fill transition-[width] duration-300 ease-out"
+                          style={{
+                            width: `${((timeScore - criterion.min) / (criterion.max - criterion.min || 1)) * 100}%`,
+                          }}
+                        />
+                      </div>
                     </div>
-                  </div>
-                </label>
+                  ) : (
+                    <div>
+                      <input
+                        className="w-full accent-sky"
+                        type="range"
+                        min={criterion.min}
+                        max={criterion.max}
+                        value={scores[criterion.id] ?? criterion.min}
+                        onChange={(event) =>
+                          setScores((current) => ({
+                            ...current,
+                            [criterion.id]: Number(event.target.value),
+                          }))
+                        }
+                      />
+                      <div className="flex items-center justify-between text-[0.76rem] text-ash">
+                        <span>{scoreLabels(criterion)}</span>
+                        <strong className="text-deep">
+                          {scores[criterion.id] ?? criterion.min}
+                        </strong>
+                      </div>
+                    </div>
+                  )}
+                </div>
               ))}
               <button className={actionClass} type="submit">
                 Salvar voto

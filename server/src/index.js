@@ -348,7 +348,10 @@ app.post('/votes', async (req, res) => {
   const { error } = await supabase.rpc('submit_vote', {
     p_user_id: user.id,
     p_team_id: teamId,
-    p_scores: scores
+    p_scores: scores.map((entry) => ({
+      criterionId: entry.criterionId,
+      score: Number(entry.score)
+    }))
   });
 
   if (error) {

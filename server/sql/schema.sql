@@ -78,7 +78,7 @@ create table if not exists vote_scores (
   id uuid primary key default gen_random_uuid(),
   vote_id uuid not null references votes(id) on delete cascade,
   criterion_id uuid not null references criteria(id) on delete cascade,
-  score int not null,
+  score numeric(4,1) not null,
   unique (vote_id, criterion_id)
 );
 
@@ -104,12 +104,15 @@ begin
   insert into vote_scores (vote_id, criterion_id, score)
   select v_vote_id,
          (value->>'criterionId')::uuid,
-         (value->>'score')::int
+         (value->>'score')::numeric(4,1)
   from jsonb_array_elements(p_scores) as value;
 
   return v_vote_id;
 end;
 $$;
+
+alter table vote_scores
+  alter column score type numeric(4,1) using score::numeric(4,1);
 
 create or replace function get_ranking(
   p_course_id uuid
