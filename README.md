@@ -1,6 +1,6 @@
 # projeto-senac
 
-Sistema de votacao ao vivo para apresentacoes de equipes (Gastronomia e ADS), com ranking em tempo real.
+Sistema de votacao ao vivo para apresentacoes de equipes de Gastronomia, com ranking em tempo real.
 
 ## Estrutura
 
@@ -11,7 +11,7 @@ Sistema de votacao ao vivo para apresentacoes de equipes (Gastronomia e ADS), co
 
 Execute o SQL em `server/sql/schema.sql` no seu projeto Supabase. Ele cria:
 
-- `profiles`, `courses`, `teams`, `criteria`, `votes`, `vote_scores`
+- `app_users`, `auth_sessions`, `courses`, `teams`, `criteria`, `votes`, `vote_scores`
 - Funcoes `submit_vote` e `get_ranking`
 - Policies basicas de RLS
 - Seeds de cursos, equipes e criterios

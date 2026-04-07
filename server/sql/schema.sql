@@ -1,10 +1,28 @@
 create extension if not exists "pgcrypto";
+create extension if not exists "citext";
 
-create table if not exists profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
-  full_name text,
+create table if not exists app_users (
+  id uuid primary key default gen_random_uuid(),
+  full_name citext not null unique,
+  password_hash text not null,
   created_at timestamptz default now()
 );
+
+create unique index if not exists app_users_full_name_unique_idx
+  on app_users (full_name);
+
+create table if not exists auth_sessions (
+  token text primary key,
+  user_id uuid not null references app_users(id) on delete cascade,
+  created_at timestamptz default now(),
+  expires_at timestamptz not null
+);
+
+create index if not exists auth_sessions_user_id_idx
+  on auth_sessions (user_id);
+
+create index if not exists auth_sessions_expires_at_idx
+  on auth_sessions (expires_at);
 
 create table if not exists courses (
   id uuid primary key default gen_random_uuid(),
@@ -29,12 +47,32 @@ create table if not exists criteria (
 
 create table if not exists votes (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
+  user_id uuid not null,
   team_id uuid not null references teams(id) on delete cascade,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
   unique (user_id, team_id)
 );
+
+do $$
+begin
+  alter table votes drop constraint if exists votes_user_id_fkey;
+exception
+  when undefined_table then null;
+end $$;
+
+insert into app_users (id, full_name, password_hash)
+select distinct
+  v.user_id,
+  ('migrated_user_' || left(v.user_id::text, 8))::citext,
+  encode(digest(gen_random_uuid()::text, 'sha256'), 'hex')
+from votes v
+left join app_users u on u.id = v.user_id
+where u.id is null;
+
+alter table votes
+  add constraint votes_user_id_fkey
+  foreign key (user_id) references app_users(id) on delete cascade;
 
 create table if not exists vote_scores (
   id uuid primary key default gen_random_uuid(),
@@ -112,49 +150,21 @@ as $$
   order by avg_percent desc, total_votes desc, t.name asc;
 $$;
 
-alter table profiles enable row level security;
 alter table votes enable row level security;
 alter table vote_scores enable row level security;
-
-create policy "Profiles are readable by owner"
-  on profiles for select
-  using (auth.uid() = id);
-
-create policy "Profiles are editable by owner"
-  on profiles for insert
-  with check (auth.uid() = id);
-
-create policy "Profiles can be updated by owner"
-  on profiles for update
-  using (auth.uid() = id);
-
-create policy "Votes readable by authenticated"
-  on votes for select
-  using (auth.role() = 'authenticated');
-
-create policy "Votes managed by owner"
-  on votes for insert
-  with check (auth.uid() = user_id);
-
-create policy "Votes updated by owner"
-  on votes for update
-  using (auth.uid() = user_id);
-
-create policy "Vote scores readable by authenticated"
-  on vote_scores for select
-  using (auth.role() = 'authenticated');
-
-create policy "Vote scores managed by authenticated"
-  on vote_scores for insert
-  with check (auth.role() = 'authenticated');
-
-create policy "Vote scores updated by authenticated"
-  on vote_scores for update
-  using (auth.role() = 'authenticated');
-
 alter table courses enable row level security;
 alter table teams enable row level security;
 alter table criteria enable row level security;
+
+drop policy if exists "Votes readable by authenticated" on votes;
+drop policy if exists "Votes managed by owner" on votes;
+drop policy if exists "Votes updated by owner" on votes;
+drop policy if exists "Vote scores readable by authenticated" on vote_scores;
+drop policy if exists "Vote scores managed by authenticated" on vote_scores;
+drop policy if exists "Vote scores updated by authenticated" on vote_scores;
+drop policy if exists "Public read courses" on courses;
+drop policy if exists "Public read teams" on teams;
+drop policy if exists "Public read criteria" on criteria;
 
 create policy "Public read courses"
   on courses for select
@@ -170,8 +180,7 @@ create policy "Public read criteria"
 
 insert into courses (name, description)
 values
-  ('Gastronomia', 'Apresentacoes de projetos gastronomicos e processos criativos.'),
-  ('ADS', 'Solucoes digitais, produtos e experiencias em tecnologia.')
+  ('Gastronomia', 'Apresentacoes de projetos gastronomicos e processos criativos.')
 on conflict (name) do nothing;
 
 insert into teams (course_id, name)
@@ -181,16 +190,9 @@ cross join (
   values
     ('Gastronomia', 'MISE IN PLACE'),
     ('Gastronomia', 'SEMEIA SABOR'),
-    ('Gastronomia', 'BOAIMPRESSAO!'),
+    ('Gastronomia', 'BOAIMPRESSÃO!'),
     ('Gastronomia', 'GASTROLAB'),
-    ('Gastronomia', 'G4 DO FUTURO'),
-    ('ADS', 'CODESQUAD'),
-    ('ADS', 'TURISTAI'),
-    ('ADS', 'WMW TOUR'),
-    ('ADS', 'SENAKKU NO GAKUSEI'),
-    ('ADS', 'PENTACODE'),
-    ('ADS', 'ECOTRASH'),
-    ('ADS', 'KAETE ADVENTURES')
+    ('Gastronomia', 'G4 DO FUTURO')
 ) as t(course_name, name)
 where c.name = t.course_name
 on conflict do nothing;
