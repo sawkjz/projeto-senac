@@ -102,6 +102,42 @@ const requireSupabase = (res) => {
   return true;
 };
 
+const findOrCreateJuror = async (fullName) => {
+  const normalizedFullName = String(fullName ?? "").trim();
+  if (!normalizedFullName) {
+    throw new Error("Nome do jurado obrigatorio");
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("app_users")
+    .select("id, full_name")
+    .eq("full_name", normalizedFullName)
+    .maybeSingle();
+
+  if (existingError) {
+    throw existingError;
+  }
+
+  if (existing) {
+    return existing;
+  }
+
+  const { data: created, error: insertError } = await supabase
+    .from("app_users")
+    .insert({
+      full_name: normalizedFullName,
+      password_hash: hashPassword(randomBytes(24).toString("hex")),
+    })
+    .select("id, full_name")
+    .single();
+
+  if (insertError || !created) {
+    throw insertError ?? new Error("Falha ao criar jurado");
+  }
+
+  return created;
+};
+
 const getUserFromToken = async (req, res) => {
   const header = req.headers.authorization ?? "";
   const token = header.replace("Bearer ", "");
@@ -333,14 +369,38 @@ app.get("/ranking", async (_req, res) => {
   res.json(filteredRanking);
 });
 
+app.get("/jurors/status", async (_req, res) => {
+  if (!requireSupabase(res)) return;
+
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("id, full_name, votes(team_id)")
+    .order("full_name");
+
+  if (error) {
+    res.status(500).json({ error: "Falha ao carregar jurados" });
+    return;
+  }
+
+  const jurors = (data ?? []).map((juror) => ({
+    id: juror.id,
+    full_name: juror.full_name,
+    has_voted: Boolean(juror.votes?.length),
+    total_votes: juror.votes?.length ?? 0,
+  }));
+
+  res.json({
+    jurors,
+    totalJurors: jurors.length,
+    votedJurors: jurors.filter((juror) => juror.has_voted).length,
+  });
+});
+
 app.post("/votes", async (req, res) => {
   if (!requireSupabase(res)) return;
 
-  const user = await getUserFromToken(req, res);
-  if (!user) return;
-
-  const { teamId, scores } = req.body ?? {};
-  if (!teamId || !Array.isArray(scores)) {
+  const { teamId, scores, jurorName } = req.body ?? {};
+  if (!teamId || !Array.isArray(scores) || !String(jurorName ?? "").trim()) {
     res.status(400).json({ error: "Payload invalido" });
     return;
   }
@@ -364,8 +424,16 @@ app.post("/votes", async (req, res) => {
     return;
   }
 
+  let juror;
+  try {
+    juror = await findOrCreateJuror(jurorName);
+  } catch (_error) {
+    res.status(500).json({ error: "Falha ao identificar jurado" });
+    return;
+  }
+
   const { error } = await supabase.rpc("submit_vote", {
-    p_user_id: user.id,
+    p_user_id: juror.id,
     p_team_id: teamId,
     p_scores: scores.map((entry) => ({
       criterionId: entry.criterionId,

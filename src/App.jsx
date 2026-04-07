@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "/api";
+const apiBaseUrl = import.meta.env.DEV
+  ? "http://localhost:3001"
+  : import.meta.env.VITE_API_BASE_URL || "/api";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -16,14 +18,13 @@ const heroHighlights = [
     description: "Votos atualizam o placar em tempo real.",
   },
   {
-    title: "Categoria fixa",
-    description: "Votacao exclusiva para equipes de Gastronomia.",
+    title: "Painel de jurados",
+    description: "Acompanhe quem ja registrou voto no evento.",
   },
 ];
 
 const DEFAULT_PAGE = "landing";
 const GASTRONOMY_COURSE_NAME = "Gastronomia";
-const AUTH_TOKEN_KEY = "senac_auth_token";
 const TIME_CRITERION_TITLE = "Tempo";
 const TIMER_MIN_SECONDS = 3 * 60;
 const TIMER_MAX_SECONDS = 5 * 60;
@@ -79,12 +80,13 @@ const secondaryActionClass =
 
 export default function App() {
   const [page, setPage] = useState(DEFAULT_PAGE);
-  const [session, setSession] = useState(null);
-  const [authView, setAuthView] = useState("login");
-  const [authError, setAuthError] = useState("");
-  const [authLoading, setAuthLoading] = useState(true);
-  const [showPassword, setShowPassword] = useState(false);
-  const [profileName, setProfileName] = useState("");
+  const [jurorName, setJurorName] = useState("");
+  const [jurorsStatus, setJurorsStatus] = useState({
+    jurors: [],
+    totalJurors: 0,
+    votedJurors: 0,
+  });
+  const [jurorsLoading, setJurorsLoading] = useState(false);
   const [status, setStatus] = useState("Conectando...");
   const [bootstrap, setBootstrap] = useState({
     courses: [],
@@ -117,49 +119,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const restoreSession = async () => {
-      const token = localStorage.getItem(AUTH_TOKEN_KEY);
-      if (!token) {
-        setAuthLoading(false);
-        return;
-      }
-
-      try {
-        const response = await fetch(`${apiBaseUrl}/auth/session`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error("Sessao invalida");
-        }
-
-        const data = await response.json();
-        setSession({
-          token,
-          user: data.user,
-        });
-      } catch (_error) {
-        localStorage.removeItem(AUTH_TOKEN_KEY);
-        setSession(null);
-      } finally {
-        setAuthLoading(false);
-      }
-    };
-
-    restoreSession();
-  }, []);
-
-  useEffect(() => {
-    if (!session?.user) {
-      setProfileName("");
-      return;
-    }
-    setProfileName(session.user.full_name ?? "");
-  }, [session]);
-
-  useEffect(() => {
     if (!isConfigured) {
       setStatus("Defina VITE_API_BASE_URL para conectar ao servidor.");
       return;
@@ -187,6 +146,10 @@ export default function App() {
 
     loadBootstrap();
   }, [isConfigured]);
+
+  useEffect(() => {
+    fetchJurorsStatus();
+  }, []);
 
   useEffect(() => {
     if (!selectedCourseId) return;
@@ -287,70 +250,30 @@ export default function App() {
     }
   };
 
-  const handleAuth = async (event) => {
-    event.preventDefault();
-    setAuthError("");
-
-    const form = new FormData(event.currentTarget);
-    const fullName = String(form.get("fullName") ?? "").trim();
-    const password = String(form.get("password") ?? "");
-
+  const fetchJurorsStatus = async (silent = false) => {
+    if (!silent) setJurorsLoading(true);
     try {
-      const endpoint = authView === "register" ? "/auth/register" : "/auth/login";
-      const response = await fetch(`${apiBaseUrl}${endpoint}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          fullName,
-          password,
-        }),
-      });
-
-      const payload = await response.json().catch(() => ({}));
+      const response = await fetch(`${apiBaseUrl}/jurors/status`);
       if (!response.ok) {
-        throw new Error(payload.error ?? "Nao foi possivel autenticar.");
+        throw new Error("Falha ao carregar jurados");
       }
-
-      localStorage.setItem(AUTH_TOKEN_KEY, payload.token);
-      setSession({
-        token: payload.token,
-        user: payload.user,
+      const data = await response.json();
+      setJurorsStatus(data);
+    } catch (_error) {
+      setJurorsStatus({
+        jurors: [],
+        totalJurors: 0,
+        votedJurors: 0,
       });
-      setProfileName(payload.user?.full_name ?? fullName);
-
-      if (authView === "register") {
-        setStatus("Cadastro e login realizados com sucesso.");
-        window.location.hash = "#votar";
-      } else {
-        setStatus("Login realizado.");
-        window.location.hash = "#votar";
-      }
-    } catch (error) {
-      setAuthError(error.message ?? "Nao foi possivel autenticar.");
+    } finally {
+      if (!silent) setJurorsLoading(false);
     }
-  };
-
-  const handleLogout = async () => {
-    if (session?.token) {
-      await fetch(`${apiBaseUrl}/auth/logout`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.token}`,
-        },
-      });
-    }
-    localStorage.removeItem(AUTH_TOKEN_KEY);
-    setSession(null);
-    setProfileName("");
-    window.location.hash = "#landing";
   };
 
   const handleVoteSubmit = async (event) => {
     event.preventDefault();
-    if (!session) {
-      setVoteFeedback("Faca login para votar.");
+    if (!jurorName.trim()) {
+      setVoteFeedback("Informe o nome do jurado.");
       return;
     }
 
@@ -377,10 +300,10 @@ export default function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.token}`,
         },
         body: JSON.stringify({
           teamId: selectedTeamId,
+          jurorName: jurorName.trim(),
           scores: payload,
         }),
       });
@@ -392,6 +315,7 @@ export default function App() {
       setVoteFeedback("Voto registrado com sucesso.");
       setTimerRunning(false);
       fetchRanking(selectedCourseId, true);
+      fetchJurorsStatus(true);
     } catch (error) {
       setVoteFeedback("Nao foi possivel registrar o voto.");
     }
@@ -573,72 +497,65 @@ export default function App() {
 
   const renderAuth = () => (
     <div
-      className={`${shellClass} grid w-full max-w-[min(92vw,440px)] gap-[18px] p-[clamp(18px,4vw,32px)] text-left`}
+      className={`${shellClass} grid w-full max-w-[min(94vw,760px)] gap-[18px] p-[clamp(18px,4vw,32px)] text-left`}
     >
-      <h2 className="text-[1.5rem] font-bold text-deep">
-        {authView === "register" ? "Criar conta" : "Entrar"}
-      </h2>
-      <p className="text-[0.9rem] leading-[1.45] text-ash">
-        Sua sessao permanece ativa ate sair.
-      </p>
-      <form className="grid gap-3" onSubmit={handleAuth}>
-        <label className="grid gap-1.5 font-semibold text-deep">
-          Nome completo
-          <input
-            className="rounded-[14px] border border-[#8c6b45]/35 bg-[#fffaf0] px-3 py-2.5 text-[0.95rem] text-deep outline-none transition focus:border-[#9f763e]"
-            name="fullName"
-            required
-          />
-        </label>
-        <label className="grid gap-1.5 font-semibold text-deep">
-          Senha
-          <div className="relative">
-            <input
-              className="w-full rounded-[14px] border border-[#8c6b45]/35 bg-[#fffaf0] px-3 py-2.5 pr-14 text-[0.95rem] text-deep outline-none transition focus:border-[#9f763e]"
-              name="password"
-              type={showPassword ? "text" : "password"}
-              required
-            />
-            <button
-              type="button"
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-deep/80 transition hover:bg-[#f0dfbd]"
-              onClick={() => setShowPassword((current) => !current)}
-              aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
-            >
-              {showPassword ? (
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M3 3l18 18" />
-                  <path d="M10.58 10.58A2 2 0 0013.41 13.4" />
-                  <path d="M9.88 4.24A10.94 10.94 0 0112 4c5.52 0 10 8 10 8a18.54 18.54 0 01-3.13 3.73" />
-                  <path d="M6.61 6.61A18.9 18.9 0 002 12s4.48 8 10 8a9.74 9.74 0 005.39-1.61" />
-                </svg>
-              )}
-            </button>
-          </div>
-        </label>
-        {authError && (
-          <p className="text-[0.9rem] font-semibold text-[#8d2c1c]">
-            {authError}
+      <div className="grid gap-2">
+        <h2 className="text-[1.5rem] font-bold text-deep">
+          Painel de Jurados
+        </h2>
+        <p className="text-[0.9rem] leading-[1.45] text-ash">
+          A antiga tela de entrar agora virou um painel rapido para acompanhar quem ja votou e acessar o placar.
+        </p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <article className={`${shellClass} p-4`}>
+          <p className="text-[0.78rem] uppercase tracking-[0.14em] text-ash">
+            Jurados com voto
           </p>
-        )}
-        <button className={actionClass} type="submit">
-          {authView === "register" ? "Cadastrar" : "Entrar"}
-        </button>
-      </form>
-      <button
-        className="w-fit bg-transparent p-0 text-left text-[0.9rem] font-semibold text-deep"
-        type="button"
-        onClick={() =>
-          setAuthView(authView === "register" ? "login" : "register")
-        }
-      >
-        {authView === "register" ? "Ja tenho conta" : "Criar nova conta"}
-      </button>
+          <strong className="mt-2 block text-[2rem] font-extrabold text-deep">
+            {jurorsStatus.votedJurors}
+          </strong>
+          <span className="text-[0.88rem] text-ash">
+            de {jurorsStatus.totalJurors} jurados cadastrados
+          </span>
+        </article>
+        <article className={`${shellClass} p-4`}>
+          <p className="text-[0.78rem] uppercase tracking-[0.14em] text-ash">
+            Acoes rapidas
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <a className={actionClass} href="#votar">
+              Ir para votacao
+            </a>
+            <a className={secondaryActionClass} href="#ranking">
+              Ver ranking
+            </a>
+          </div>
+        </article>
+      </div>
+      <div className={`${shellClass} grid gap-3 p-4`}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-[1rem] font-bold text-deep">
+              Registro dos jurados
+            </h3>
+            <p className="text-[0.88rem] text-ash">
+              Lista de quem ja registrou voto no evento.
+            </p>
+          </div>
+          <button
+            className={secondaryActionClass}
+            type="button"
+            onClick={() => fetchJurorsStatus()}
+          >
+            Atualizar
+          </button>
+        </div>
+        <JurorsStatusList
+          jurors={jurorsStatus.jurors}
+          loading={jurorsLoading}
+        />
+      </div>
       <a className={secondaryActionClass} href="#landing">
         Voltar para a landing
       </a>
@@ -653,19 +570,19 @@ export default function App() {
             Painel de voto
           </p>
           <h1 className="text-[clamp(1.4rem,2.5vw,2.2rem)] font-extrabold leading-[1.08] text-deep">
-            Bem-vindo{profileName ? `, ${profileName}` : ""}.
+            Painel de voto dos jurados.
           </h1>
           <p className="text-[0.9rem] leading-[1.45] text-ash">
-            Selecione a equipe e registre a avaliacao em poucos cliques.
+            Informe o nome do jurado, selecione a equipe e registre a avaliacao em poucos cliques.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <a className={secondaryActionClass} href="#landing">
             Landing
           </a>
-          <button className={actionClass} type="button" onClick={handleLogout}>
-            Sair
-          </button>
+          <a className={actionClass} href="#auth">
+            Painel
+          </a>
         </div>
       </header>
 
@@ -680,6 +597,21 @@ export default function App() {
                 Gastronomia
               </span>
             </div>
+          </div>
+
+          <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
+            <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
+              Jurado
+            </p>
+            <label className="grid gap-1.5 font-semibold text-deep">
+              Nome do jurado
+              <input
+                className="rounded-[14px] border border-[#8c6b45]/35 bg-[#fffaf0] px-3 py-2.5 text-[0.95rem] text-deep outline-none transition focus:border-[#9f763e]"
+                value={jurorName}
+                onChange={(event) => setJurorName(event.target.value)}
+                placeholder="Ex.: Maria Souza"
+              />
+            </label>
           </div>
 
           <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
@@ -872,26 +804,12 @@ export default function App() {
     </div>
   );
 
-  if (authLoading) {
-    return (
-      <VintageFrame centerContent>
-        <div className="mx-auto w-full max-w-[1040px] px-5 py-[120px] text-center text-ash">
-          <p>Carregando sessao...</p>
-        </div>
-      </VintageFrame>
-    );
-  }
-
   if (page === "auth") {
     return <VintageFrame centerContent>{renderAuth()}</VintageFrame>;
   }
 
   if (page === "votar") {
-    return session ? (
-      <VintageFrame>{renderVoting()}</VintageFrame>
-    ) : (
-      <VintageFrame centerContent>{renderAuth()}</VintageFrame>
-    );
+    return <VintageFrame>{renderVoting()}</VintageFrame>;
   }
 
   return <VintageFrame>{renderLanding()}</VintageFrame>;
@@ -942,6 +860,53 @@ function RankingList({ items, loading, nodesRef, showVotes = false }) {
               {showVotes && <span>{item.total_votes} votos</span>}
             </div>
           </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function JurorsStatusList({ jurors, loading }) {
+  if (loading) {
+    return (
+      <div className="grid gap-2 text-[0.9rem] leading-[1.45] text-ash">
+        Carregando jurados...
+      </div>
+    );
+  }
+
+  if (!jurors.length) {
+    return (
+      <div className="grid gap-2 text-[0.9rem] leading-[1.45] text-ash">
+        Nenhum jurado registrado ainda.
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-2">
+      {jurors.map((juror) => (
+        <article
+          key={juror.id}
+          className={`${shellClass} flex items-center justify-between gap-3 px-3 py-2.5`}
+        >
+          <div>
+            <strong className="block text-[0.95rem] text-deep">
+              {juror.full_name}
+            </strong>
+            <span className="text-[0.8rem] text-ash">
+              {juror.has_voted ? "Voto registrado" : "Aguardando voto"}
+            </span>
+          </div>
+          <span
+            className={`rounded-full px-3 py-1 text-[0.78rem] font-bold ${
+              juror.has_voted
+                ? "bg-[#dcecc8] text-[#38551a]"
+                : "bg-[#f2dfc4] text-[#7a5330]"
+            }`}
+          >
+            {juror.has_voted ? "Concluido" : "Pendente"}
+          </span>
         </article>
       ))}
     </div>
