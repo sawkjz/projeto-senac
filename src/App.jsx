@@ -931,6 +931,12 @@ function VintageFrame({ children, centerContent = false }) {
         src="/img/Chef%20at%20work%20with%20fresh%20ingredients.png"
         className="pointer-events-none absolute bottom-[-23px] right-0 z-50 w-[clamp(160px,23vw,420px)] max-w-[42vw] object-contain opacity-95"
       />
+      <img
+        alt=""
+        aria-hidden="true"
+        src="/img/Grilled%20steak%20with%20tomato%20and%20veggies.png"
+        className="pointer-events-none absolute left-0 top-0 z-40 w-[clamp(120px,18vw,280px)] max-w-[28vw] object-contain opacity-95"
+      />
 
       <img
         alt=""
