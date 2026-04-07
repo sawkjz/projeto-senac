@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "/api";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -43,11 +43,11 @@ const formatScoreValue = (value) =>
 const formatRankingScore = (value) => Number(value ?? 0).toFixed(1);
 const getTimePenalty = (elapsedSeconds) => {
   if (elapsedSeconds < TIMER_MIN_SECONDS) {
-    return Math.floor((TIMER_MIN_SECONDS - elapsedSeconds) / TIMER_PENALTY_STEP_SECONDS) * 0.1;
+    return Math.ceil((TIMER_MIN_SECONDS - elapsedSeconds) / TIMER_PENALTY_STEP_SECONDS) * 0.1;
   }
 
   if (elapsedSeconds > TIMER_MAX_SECONDS) {
-    return Math.floor((elapsedSeconds - TIMER_MAX_SECONDS) / TIMER_PENALTY_STEP_SECONDS) * 0.1;
+    return Math.ceil((elapsedSeconds - TIMER_MAX_SECONDS) / TIMER_PENALTY_STEP_SECONDS) * 0.1;
   }
 
   return 0;
