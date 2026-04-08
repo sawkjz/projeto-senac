@@ -1,9 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const apiBaseUrl = import.meta.env.DEV
-  ? "http://localhost:3001"
-  : import.meta.env.VITE_API_BASE_URL || "/api";
+// Prioridade: VITE_API_BASE_URL > localhost:3001 em dev > /api em produção
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL 
+  ? import.meta.env.VITE_API_BASE_URL
+  : import.meta.env.DEV
+    ? "http://localhost:3001"
+    : "/api";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -18,7 +21,7 @@ const heroHighlights = [
     description: "Votos atualizam o placar em tempo real.",
   },
   {
-    title: "Painel de jurados",
+    title: "Acompanhamento ao vivo",
     description: "Acompanhe quem ja registrou voto no evento.",
   },
 ];
@@ -29,6 +32,13 @@ const TIME_CRITERION_TITLE = "Tempo";
 const TIMER_MIN_SECONDS = 3 * 60;
 const TIMER_MAX_SECONDS = 5 * 60;
 const TIMER_PENALTY_STEP_SECONDS = 30;
+const TEAM_FALLBACK_NAMES = [
+  "MISE IN PLACE",
+  "SEMEIA SABOR",
+  "BOAIMPRESSAO!",
+  "GASTROLAB",
+  "G4 DO FUTURO",
+];
 
 const scoreLabels = (criterion) => `${criterion.min} - ${criterion.max}`;
 const isTimeCriterion = (criterion) => criterion.title === TIME_CRITERION_TITLE;
@@ -57,7 +67,7 @@ const getTimeScore = (criterion, elapsedSeconds) =>
   clamp(criterion.max - getTimePenalty(elapsedSeconds), criterion.min, criterion.max);
 const getTimerStatus = (elapsedSeconds) => {
   if (elapsedSeconds === 0) {
-    return "Cronometro pronto para iniciar.";
+    return "Cronômetro pronto para iniciar.";
   }
 
   if (elapsedSeconds < TIMER_MIN_SECONDS) {
@@ -99,6 +109,8 @@ export default function App() {
   const [ranking, setRanking] = useState([]);
   const [rankingLoading, setRankingLoading] = useState(false);
   const [voteFeedback, setVoteFeedback] = useState("");
+  const [showTeamSelectionError, setShowTeamSelectionError] = useState(false);
+  const [selectedTeamFallbackName, setSelectedTeamFallbackName] = useState("");
   const [timerElapsedSeconds, setTimerElapsedSeconds] = useState(0);
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerStarted, setTimerStarted] = useState(false);
@@ -140,7 +152,7 @@ export default function App() {
           setSelectedCourseId(gastronomia.id);
         }
       } catch (error) {
-        setStatus("Nao foi possivel carregar os dados do evento.");
+        setStatus("Não foi possível carregar os dados do evento.");
       }
     };
 
@@ -191,6 +203,7 @@ export default function App() {
     setTimerRunning(false);
     setTimerStarted(false);
     setVoteFeedback("");
+    setShowTeamSelectionError(false);
   }, [selectedTeamId, bootstrap.criteria]);
 
   useEffect(() => {
@@ -255,6 +268,9 @@ export default function App() {
     try {
       const response = await fetch(`${apiBaseUrl}/jurors/status`);
       if (!response.ok) {
+        // Tenta mostrar detalhes do erro retornado pelo backend
+        const errorData = await response.json().catch(() => ({}));
+        console.error("Server Error Details /jurors/status:", errorData);
         throw new Error("Falha ao carregar jurados");
       }
       const data = await response.json();
@@ -272,13 +288,22 @@ export default function App() {
 
   const handleVoteSubmit = async (event) => {
     event.preventDefault();
+    setShowTeamSelectionError(false);
+
     if (!jurorName.trim()) {
       setVoteFeedback("Informe o nome do jurado.");
       return;
     }
 
-    if (!selectedTeamId) {
-      setVoteFeedback("Selecione a equipe.");
+    if (!selectedTeamId && !selectedTeamFallbackName) {
+      setShowTeamSelectionError(true);
+      return;
+    }
+
+    if (!selectedTeamId && selectedTeamFallbackName) {
+      setVoteFeedback(
+        "Equipe selecionada visualmente, mas os dados do backend nao carregaram. Recarregue a pagina e tente novamente.",
+      );
       return;
     }
 
@@ -309,7 +334,8 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error("Falha ao salvar voto");
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Falha ao salvar voto");
       }
 
       setVoteFeedback("Voto registrado com sucesso.");
@@ -317,7 +343,7 @@ export default function App() {
       fetchRanking(selectedCourseId, true);
       fetchJurorsStatus(true);
     } catch (error) {
-      setVoteFeedback("Nao foi possivel registrar o voto.");
+      setVoteFeedback(error.message ?? "Nao foi possivel registrar o voto.");
     }
   };
 
@@ -328,6 +354,18 @@ export default function App() {
   const courseTeams = bootstrap.teams.filter(
     (team) => team.course_id === selectedCourseIdSafe,
   );
+  const useFallbackTeams = courseTeams.length === 0;
+  const displayedTeams = useFallbackTeams
+    ? TEAM_FALLBACK_NAMES.map((name) => ({
+        id: `fallback:${name}`,
+        name,
+        isFallback: true,
+      }))
+    : courseTeams.map((team) => ({
+        id: team.id,
+        name: team.name,
+        isFallback: false,
+      }));
   const selectedTeam = courseTeams.find((team) => team.id === selectedTeamId);
   const timeCriterion = bootstrap.criteria.find(isTimeCriterion);
   const timePenalty = timeCriterion ? getTimePenalty(timerElapsedSeconds) : 0;
@@ -345,17 +383,19 @@ export default function App() {
     }
   }, [selectedTeamId, courseTeams]);
 
+  useEffect(() => {
+    if (!useFallbackTeams) {
+      setSelectedTeamFallbackName("");
+    }
+  }, [useFallbackTeams]);
+
   const renderLanding = () => (
     <div className="mx-auto w-full max-w-[min(96vw,1180px)] px-[clamp(12px,2.6vw,34px)] pb-[clamp(16px,3vw,30px)]">
       <header className="pt-2 xl:pt-3">
-        <nav className="flex items-center justify-between gap-3 py-1.5 xl:py-2">
+        <nav className="flex items-center justify-center gap-3 py-1.5 text-center xl:py-2">
           <span className="text-[1.16rem] font-extrabold tracking-[0.02em] text-deep">
             Voto Ao Vivo
           </span>
-          <div className="hidden items-center gap-3.5 text-[0.84rem] text-ash md:flex"></div>
-          <a className={actionClass} href="#auth">
-            Entrar
-          </a>
         </nav>
 
         <section className="grid gap-3 pb-4 md:grid-cols-[1.2fr_0.8fr] xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)] xl:gap-4 xl:pb-[18px]">
@@ -379,8 +419,8 @@ export default function App() {
               .
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <a className={actionClass} href="#auth">
-                Entrar para votar
+              <a className={actionClass} href="#votar">
+                Votar agora
               </a>
               <a className={secondaryActionClass} href="#ranking">
                 Ver ranking
@@ -399,8 +439,8 @@ export default function App() {
             </h2>
             <ul className="mt-2.5 list-disc space-y-1 pl-4 text-[0.84rem] leading-[1.45] text-ash">
               <li>Ranking de Gastronomia</li>
-              <li>Media da equipe dividida por 3</li>
-              <li>Animacao de subida/queda</li>
+              <li>Média da equipe dividida por 3</li>
+              <li>Animação de subida/queda</li>
             </ul>
             <div className="mt-3 rounded-xl bg-deep/5 px-3 py-2.5 font-semibold text-deep">
               <p className="text-[0.78rem] text-ash">Disponibilidade</p>
@@ -501,10 +541,10 @@ export default function App() {
     >
       <div className="grid gap-2">
         <h2 className="text-[1.5rem] font-bold text-deep">
-          Painel de Jurados
+          Acompanhamento de Jurados
         </h2>
         <p className="text-[0.9rem] leading-[1.45] text-ash">
-          A antiga tela de entrar agora virou um painel rapido para acompanhar quem ja votou e acessar o placar.
+          Consulte rapidamente quem já votou e acompanhe o andamento da avaliação.
         </p>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
@@ -521,11 +561,11 @@ export default function App() {
         </article>
         <article className={`${shellClass} p-4`}>
           <p className="text-[0.78rem] uppercase tracking-[0.14em] text-ash">
-            Acoes rapidas
+            Ações rápidas
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <a className={actionClass} href="#votar">
-              Ir para votacao
+              Ir para votação
             </a>
             <a className={secondaryActionClass} href="#ranking">
               Ver ranking
@@ -557,38 +597,35 @@ export default function App() {
         />
       </div>
       <a className={secondaryActionClass} href="#landing">
-        Voltar para a landing
+        Voltar
       </a>
     </div>
   );
 
   const renderVoting = () => (
-    <div className="mx-auto w-full max-w-[min(96vw,1160px)] px-[clamp(10px,2.3vw,24px)] py-[clamp(10px,2.2vw,20px)]">
-      <header className="flex flex-col items-start justify-between gap-3 pb-3 md:flex-row md:items-end">
+    <div className="mx-auto w-full max-w-[min(98vw,1320px)] px-[clamp(12px,2.6vw,34px)] py-[clamp(14px,2.8vw,30px)]">
+      <header className="flex flex-col items-start justify-between gap-4 pb-4 md:flex-row md:items-end">
         <div>
           <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
             Painel de voto
           </p>
-          <h1 className="text-[clamp(1.4rem,2.5vw,2.2rem)] font-extrabold leading-[1.08] text-deep">
+          <h1 className="text-[clamp(1.7rem,3vw,3rem)] font-extrabold leading-[1.02] text-deep">
             Painel de voto dos jurados.
           </h1>
-          <p className="text-[0.9rem] leading-[1.45] text-ash">
-            Informe o nome do jurado, selecione a equipe e registre a avaliacao em poucos cliques.
+          <p className="max-w-[62ch] text-[0.98rem] leading-[1.5] text-ash">
+            Informe seu nome, selecione a equipe e registre a avaliacao em poucos cliques.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <a className={secondaryActionClass} href="#landing">
-            Landing
-          </a>
-          <a className={actionClass} href="#auth">
-            Painel
+        <div className="flex flex-wrap items-center gap-2">
+          <a className={actionClass} href="#landing">
+            Voltar
           </a>
         </div>
       </header>
 
-      <main className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-        <section className="grid gap-2.5">
-          <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
+      <main className="grid gap-4 xl:grid-cols-[minmax(0,1.28fr)_minmax(340px,0.92fr)]">
+        <section className="grid gap-4">
+          <div className={`${shellClass} grid gap-3 p-[18px]`}>
             <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
               Curso
             </p>
@@ -599,7 +636,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
+          <div className={`${shellClass} grid gap-3 p-[18px]`}>
             <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
               Jurado
             </p>
@@ -614,30 +651,50 @@ export default function App() {
             </label>
           </div>
 
-          <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
+          <div className={`${shellClass} grid gap-3 p-[18px]`}>
             <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
               Equipe
             </p>
-            <div className="grid gap-2 md:grid-cols-2">
-              {courseTeams.map((team) => (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[0.9rem] leading-[1.45] text-ash">
+                Escolha abaixo a equipe que esta sendo avaliada.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {displayedTeams.map((team) => (
                 <button
                   key={team.id}
                   type="button"
-                  className={`rounded-xl border px-2.5 py-2.5 text-left text-[0.82rem] font-bold transition ${
-                    team.id === selectedTeamId
-                      ? "border-transparent bg-sunset/20 text-deep shadow-soft"
-                      : "border-deep/20 bg-white/60 text-deep hover:bg-deep/5"
+                  className={`rounded-full border px-3.5 py-2 text-[0.86rem] font-bold transition ${
+                    (team.isFallback && selectedTeamFallbackName === team.name) ||
+                    (!team.isFallback && team.id === selectedTeamId)
+                      ? "border-transparent bg-sunset/25 text-deep shadow-soft ring-2 ring-[#dba85f]/45"
+                      : "border-[#8d673c]/20 bg-[#fffaf0]/80 text-deep hover:bg-deep/5"
                   }`}
-                  onClick={() => setSelectedTeamId(team.id)}
+                  onClick={() => {
+                    if (team.isFallback) {
+                      setSelectedTeamFallbackName(team.name);
+                      setSelectedTeamId("");
+                    } else {
+                      setSelectedTeamId(team.id);
+                      setSelectedTeamFallbackName("");
+                    }
+                    setShowTeamSelectionError(false);
+                  }}
                 >
-                  <span>{team.name}</span>
+                  {team.name}
                 </button>
               ))}
             </div>
+            {showTeamSelectionError && !selectedTeamFallbackName && (
+              <p className="text-[0.9rem] font-semibold text-[#8d2c1c]">
+                Selecione a equipe.
+              </p>
+            )}
           </div>
 
-          <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
-            <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className={`${shellClass} grid gap-3 p-[18px]`}>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
                   Cronometro
@@ -646,10 +703,10 @@ export default function App() {
                   Controle do tempo da apresentacao
                 </h3>
                 <p className="text-[0.85rem] leading-[1.45] text-ash">
-                  Entre 3:00 e 5:00 nao perde pontos. Fora dessa faixa, perde 0,1 a cada 30 segundos.
+                  Entre 3:00 e 5:00 não perde pontos. Fora dessa faixa, perde 0,1 a cada 30 segundos.
                 </p>
               </div>
-              <div className="rounded-2xl border border-[#8d673c]/25 bg-white/60 px-4 py-3 text-right shadow-soft">
+              <div className="w-full rounded-2xl border border-[#8d673c]/25 bg-white/60 px-4 py-4 text-center shadow-soft lg:w-[260px] lg:text-right">
                 <strong className="block text-[1.8rem] font-extrabold tracking-[0.06em] text-deep">
                   {formatElapsedTime(timerElapsedSeconds)}
                 </strong>
@@ -658,7 +715,7 @@ export default function App() {
                 </span>
               </div>
             </div>
-            <div className="grid gap-2 rounded-2xl border border-[#8d673c]/20 bg-[#fffaf0]/80 p-3 md:grid-cols-[1fr_auto] md:items-center">
+            <div className="grid gap-3 rounded-2xl border border-[#8d673c]/20 bg-[#fffaf0]/80 p-4 md:grid-cols-[1fr_auto] md:items-center">
               <div className="grid gap-1 text-[0.85rem] text-ash">
                 <span>
                   Penalidade atual:{" "}
@@ -709,14 +766,12 @@ export default function App() {
             </div>
           </div>
 
-          <div className={`${shellClass} grid gap-2.5 p-[14px]`}>
+          <div className={`${shellClass} grid gap-3 p-[18px]`}>
             <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
               Avaliacao
             </p>
             <h3 className="text-base font-bold text-deep">
-              {selectedTeam
-                ? `Equipe ${selectedTeam.name}`
-                : "Selecione uma equipe"}
+              {selectedTeam ? `Equipe ${selectedTeam.name}` : "Avaliacao da equipe"}
             </h3>
             <form className="grid gap-3" onSubmit={handleVoteSubmit}>
               {bootstrap.criteria.map((criterion, index) => (
@@ -775,16 +830,11 @@ export default function App() {
               <button className={actionClass} type="submit">
                 Salvar voto
               </button>
-              {voteFeedback && (
-                <p className="text-[0.9rem] font-semibold text-deep">
-                  {voteFeedback}
-                </p>
-              )}
             </form>
           </div>
         </section>
 
-        <aside className={`${shellClass} sticky top-3 h-fit p-3 lg:block`}>
+        <aside className={`${shellClass} h-fit p-4 xl:sticky xl:top-4`}>
           <div className="mb-2">
             <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
               Ranking ao vivo
@@ -793,6 +843,9 @@ export default function App() {
               {gastronomiaCourse?.name ?? "Gastronomia"}
             </h3>
           </div>
+          <p className="mb-3 text-[0.88rem] leading-[1.45] text-ash">
+            O ranking fica visivel o tempo todo para facilitar a navegacao no celular e no computador.
+          </p>
           <RankingList
             items={ranking}
             loading={rankingLoading}
@@ -935,7 +988,7 @@ function VintageFrame({ children, centerContent = false }) {
         alt=""
         aria-hidden="true"
         src="/img/Grilled%20steak%20with%20tomato%20and%20veggies.png"
-        className="pointer-events-none absolute left-0 top-0 z-40 w-[clamp(120px,18vw,280px)] max-w-[28vw] object-contain opacity-95"
+        className="pointer-events-none absolute left-0 top-0 z-40 w-[clamp(170px,24vw,360px)] max-w-[34vw] object-contain opacity-95"
       />
 
       <img
@@ -975,7 +1028,7 @@ function VintageFrame({ children, centerContent = false }) {
         >
           <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:radial-gradient(rgba(111,79,37,0.18)_0.8px,transparent_0.8px)] [background-size:4px_4px]" />
           <div className="pointer-events-none absolute inset-[9px] rounded-[clamp(18px,3vw,28px)] border border-[#a98251]/30" />
-          <div className="relative z-10">{children}</div>
+          <div className="relative z-10 pb-[clamp(10px,1.8vw,22px)]">{children}</div>
         </div>
       </div>
     </div>

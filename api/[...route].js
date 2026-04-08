@@ -6,9 +6,27 @@ import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 
 const app = express();
 const port = process.env.PORT || 3001;
+const isDev = process.env.NODE_ENV !== "production";
 
-app.use(cors());
+// CORS configurado para aceitar requisições de qualquer origem
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: false
+}));
 app.use(express.json());
+
+// Middleware de logging
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
+
+// Health check sem verificação de Supabase
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -24,10 +42,11 @@ const GASTRONOMY_COURSE_NAME = "Gastronomia";
 const GASTRONOMY_TEAMS = [
   "MISE IN PLACE",
   "SEMEIA SABOR",
-  "BOAIMPRESSÃƒO!",
+  "BOAIMPRESSAO!",
   "GASTROLAB",
   "G4 DO FUTURO",
 ];
+const MAX_JURORS = 3;
 
 const normalizeTeamName = (name = "") =>
   name
@@ -120,6 +139,22 @@ const findOrCreateJuror = async (fullName) => {
 
   if (existing) {
     return existing;
+  }
+
+  const { data: votedJurors, error: jurorCountError } = await supabase
+    .from("votes")
+    .select("user_id");
+
+  if (jurorCountError) {
+    throw jurorCountError;
+  }
+
+  const distinctJurorsCount = new Set(
+    (votedJurors ?? []).map((vote) => vote.user_id),
+  ).size;
+
+  if (distinctJurorsCount >= MAX_JURORS) {
+    throw new Error(`Limite de ${MAX_JURORS} jurados atingido`);
   }
 
   const { data: created, error: insertError } = await supabase
@@ -285,52 +320,67 @@ app.post("/auth/logout", async (req, res) => {
 });
 
 app.get("/bootstrap", async (_req, res) => {
-  if (!requireSupabase(res)) return;
+  try {
+    if (!requireSupabase(res)) return;
 
-  const [course, criteria] = await Promise.all([
-    supabase
-      .from("courses")
-      .select("id, name, description")
-      .eq("name", GASTRONOMY_COURSE_NAME)
-      .maybeSingle(),
-    supabase
-      .from("criteria")
-      .select("id, title, question, min, max, sort_order")
-      .order("sort_order"),
-  ]);
+    const [course, criteria] = await Promise.all([
+      supabase
+        .from("courses")
+        .select("id, name, description")
+        .eq("name", GASTRONOMY_COURSE_NAME)
+        .maybeSingle(),
+      supabase
+        .from("criteria")
+        .select("id, title, question, min, max, sort_order")
+        .order("sort_order"),
+    ]);
 
-  if (course.error || criteria.error) {
-    res.status(500).json({ error: "Falha ao carregar dados" });
-    return;
+    if (course.error || criteria.error) {
+      const detail = course.error?.message ?? criteria.error?.message;
+      res.status(500).json({
+        error: "Falha ao carregar dados",
+        ...(isDev && detail ? { detail } : {}),
+      });
+      return;
+    }
+
+    const courseId = course.data?.id;
+    const teams = courseId
+      ? await supabase
+          .from("teams")
+          .select("id, name, course_id")
+          .eq("course_id", courseId)
+          .order("name")
+      : { data: [], error: null };
+
+    if (teams.error) {
+      res.status(500).json({
+        error: "Falha ao carregar dados",
+        ...(isDev ? { detail: teams.error.message } : {}),
+      });
+      return;
+    }
+
+    const filteredTeams = (teams.data ?? [])
+      .filter((team) => allowedTeamKeys.has(normalizeTeamName(team.name)))
+      .sort(
+        (a, b) =>
+          (teamOrder.get(normalizeTeamName(a.name)) ?? Number.MAX_SAFE_INTEGER) -
+          (teamOrder.get(normalizeTeamName(b.name)) ?? Number.MAX_SAFE_INTEGER),
+      );
+
+    res.json({
+      courses: course.data ? [course.data] : [],
+      teams: filteredTeams,
+      criteria: criteria.data ?? [],
+    });
+  } catch (error) {
+    console.error("[/bootstrap] Error:", error);
+    res.status(500).json({
+      error: "Erro ao carregar bootstrap",
+      ...(isDev ? { detail: error.message } : {}),
+    });
   }
-
-  const courseId = course.data?.id;
-  const teams = courseId
-    ? await supabase
-        .from("teams")
-        .select("id, name, course_id")
-        .eq("course_id", courseId)
-        .order("name")
-    : { data: [], error: null };
-
-  if (teams.error) {
-    res.status(500).json({ error: "Falha ao carregar dados" });
-    return;
-  }
-
-  const filteredTeams = (teams.data ?? [])
-    .filter((team) => allowedTeamKeys.has(normalizeTeamName(team.name)))
-    .sort(
-      (a, b) =>
-        (teamOrder.get(normalizeTeamName(a.name)) ?? Number.MAX_SAFE_INTEGER) -
-        (teamOrder.get(normalizeTeamName(b.name)) ?? Number.MAX_SAFE_INTEGER),
-    );
-
-  res.json({
-    courses: course.data ? [course.data] : [],
-    teams: filteredTeams,
-    criteria: criteria.data ?? [],
-  });
 });
 
 app.get("/ranking", async (_req, res) => {
@@ -370,88 +420,139 @@ app.get("/ranking", async (_req, res) => {
 });
 
 app.get("/jurors/status", async (_req, res) => {
-  if (!requireSupabase(res)) return;
+  try {
+    if (!requireSupabase(res)) return;
 
-  const { data, error } = await supabase
-    .from("app_users")
-    .select("id, full_name, votes(team_id)")
-    .order("full_name");
+    const { data, error } = await supabase
+      .from("app_users")
+      .select("id, full_name, votes(team_id)")
+      .order("full_name");
 
-  if (error) {
-    res.status(500).json({ error: "Falha ao carregar jurados" });
-    return;
+    if (error) {
+      console.error("[/jurors/status] Error:", error);
+      res.status(500).json({
+        error: "Falha ao carregar jurados",
+        ...(isDev ? { detail: error.message } : {}),
+      });
+      return;
+    }
+
+    const jurors = (data ?? []).map((juror) => ({
+      id: juror.id,
+      full_name: juror.full_name,
+      has_voted: Boolean(juror.votes?.length),
+      total_votes: juror.votes?.length ?? 0,
+    }));
+
+    res.json({
+      jurors,
+      totalJurors: jurors.length,
+      votedJurors: jurors.filter((juror) => juror.has_voted).length,
+    });
+  } catch (error) {
+    console.error("[/jurors/status] Unexpected error:", error);
+    res.status(500).json({
+      error: "Erro ao carregar jurados",
+      ...(isDev ? { detail: error.message } : {}),
+    });
   }
-
-  const jurors = (data ?? []).map((juror) => ({
-    id: juror.id,
-    full_name: juror.full_name,
-    has_voted: Boolean(juror.votes?.length),
-    total_votes: juror.votes?.length ?? 0,
-  }));
-
-  res.json({
-    jurors,
-    totalJurors: jurors.length,
-    votedJurors: jurors.filter((juror) => juror.has_voted).length,
-  });
 });
 
 app.post("/votes", async (req, res) => {
-  if (!requireSupabase(res)) return;
-
-  const { teamId, scores, jurorName } = req.body ?? {};
-  if (!teamId || !Array.isArray(scores) || !String(jurorName ?? "").trim()) {
-    res.status(400).json({ error: "Payload invalido" });
-    return;
-  }
-
-  const { data: team, error: teamError } = await supabase
-    .from("teams")
-    .select("id, name, courses!inner(name)")
-    .eq("id", teamId)
-    .eq("courses.name", GASTRONOMY_COURSE_NAME)
-    .maybeSingle();
-
-  if (teamError) {
-    res.status(500).json({ error: "Falha ao validar equipe" });
-    return;
-  }
-
-  if (!team || !allowedTeamKeys.has(normalizeTeamName(team.name))) {
-    res
-      .status(400)
-      .json({ error: "Somente equipes de Gastronomia podem receber votos" });
-    return;
-  }
-
-  let juror;
   try {
-    juror = await findOrCreateJuror(jurorName);
-  } catch (_error) {
-    res.status(500).json({ error: "Falha ao identificar jurado" });
-    return;
+    if (!requireSupabase(res)) return;
+
+    const { teamId, scores, jurorName } = req.body ?? {};
+    if (!teamId || !Array.isArray(scores) || !String(jurorName ?? "").trim()) {
+      res.status(400).json({ error: "Payload invalido" });
+      return;
+    }
+
+    const { data: team, error: teamError } = await supabase
+      .from("teams")
+      .select("id, name, courses!inner(name)")
+      .eq("id", teamId)
+      .eq("courses.name", GASTRONOMY_COURSE_NAME)
+      .maybeSingle();
+
+    if (teamError) {
+      console.error("[/votes] Team error:", teamError);
+      res.status(500).json({ error: "Falha ao validar equipe" });
+      return;
+    }
+
+    if (!team || !allowedTeamKeys.has(normalizeTeamName(team.name))) {
+      res
+        .status(400)
+        .json({ error: "Somente equipes de Gastronomia podem receber votos" });
+      return;
+    }
+
+    let juror;
+    try {
+      juror = await findOrCreateJuror(jurorName);
+    } catch (error) {
+      const message = error?.message ?? "";
+      if (message.includes("Limite de")) {
+        res.status(400).json({ error: message });
+        return;
+      }
+
+      console.error("[/votes] Juror error:", error);
+      res.status(500).json({ error: "Falha ao identificar jurado" });
+      return;
+    }
+
+    const { error } = await supabase.rpc("submit_vote", {
+      p_user_id: juror.id,
+      p_team_id: teamId,
+      p_scores: scores.map((entry) => ({
+        criterionId: entry.criterionId,
+        score: Number(entry.score),
+      })),
+    });
+
+    if (error) {
+      console.error("[/votes] Submit vote error:", error);
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.status(201).json({ ok: true });
+  } catch (error) {
+    console.error("[/votes] Unexpected error:", error);
+    res.status(500).json({
+      error: "Erro ao salvar voto",
+      ...(isDev ? { detail: error.message } : {}),
+    });
   }
-
-  const { error } = await supabase.rpc("submit_vote", {
-    p_user_id: juror.id,
-    p_team_id: teamId,
-    p_scores: scores.map((entry) => ({
-      criterionId: entry.criterionId,
-      score: Number(entry.score),
-    })),
-  });
-
-  if (error) {
-    res.status(500).json({ error: error.message });
-    return;
-  }
-
-  res.status(201).json({ ok: true });
 });
+
+// Rota de debug (apenas em desenvolvimento)
+if (isDev) {
+  app.get("/debug/config", (_req, res) => {
+    res.json({
+      isDev,
+      supabaseConfigured: Boolean(supabase),
+      supabaseUrl: supabaseUrl ? "✓ Configurado" : "✗ Ausente",
+      supabaseKey: supabaseServiceKey ? "✓ Configurado" : "✗ Ausente",
+      port,
+      timestamp: new Date().toISOString(),
+    });
+  });
+}
 
 if (!process.env.VERCEL) {
   app.listen(port, () => {
-    console.log(`Servidor ativo em http://localhost:${port}`);
+    console.log(`
+╔════════════════════════════════════════╗
+║  Servidor da API iniciado com sucesso ║
+╚════════════════════════════════════════╝
+URL: http://localhost:${port}
+Modo: ${isDev ? "DESENVOLVIMENTO" : "PRODUÇÃO"}
+Supabase: ${supabase ? "✓ Conectado" : "✗ NÃO CONFIGURADO"}
+${!supabase ? "⚠️  Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no .env" : ""}
+    `);
   });
 }
 
