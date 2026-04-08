@@ -30,6 +30,9 @@ create table if not exists courses (
   description text
 );
 
+alter table courses
+  add column if not exists description text;
+
 create table if not exists teams (
   id uuid primary key default gen_random_uuid(),
   course_id uuid not null references courses(id) on delete cascade,
@@ -49,10 +52,47 @@ create table if not exists votes (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
   team_id uuid not null references teams(id) on delete cascade,
+  category text not null default 'gastronomia' check (category in ('gastronomia', 'ads')),
+  presentation_time_seconds integer not null default 0,
+  time_penalty numeric(4,1) not null default 0,
+  base_score numeric(5,1) not null default 0,
+  final_score numeric(5,1) not null default 0,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
-  unique (user_id, team_id)
+  unique (user_id, team_id, category)
 );
+
+alter table votes
+  add column if not exists category text;
+
+update votes
+set category = 'gastronomia'
+where category is null;
+
+alter table votes
+  alter column category set default 'gastronomia';
+
+alter table votes
+  alter column category set not null;
+
+alter table votes
+  drop constraint if exists votes_category_check;
+
+alter table votes
+  add constraint votes_category_check
+  check (category in ('gastronomia', 'ads'));
+
+alter table votes
+  add column if not exists presentation_time_seconds integer not null default 0,
+  add column if not exists time_penalty numeric(4,1) not null default 0,
+  add column if not exists base_score numeric(5,1) not null default 0,
+  add column if not exists final_score numeric(5,1) not null default 0;
+
+alter table votes
+  drop constraint if exists votes_user_id_team_id_key;
+
+alter table votes
+  add constraint votes_user_id_team_id_category_key unique (user_id, team_id, category);
 
 do $$
 begin
@@ -85,6 +125,8 @@ create table if not exists vote_scores (
 create or replace function submit_vote(
   p_user_id uuid,
   p_team_id uuid,
+  p_category text,
+  p_presentation_time_seconds integer,
   p_scores jsonb
 ) returns uuid
 language plpgsql
@@ -92,11 +134,58 @@ security definer
 as $$
 declare
   v_vote_id uuid;
+  v_base_score numeric(5,1);
+  v_time_penalty numeric(4,1);
+  v_final_score numeric(5,1);
+  v_min_seconds constant int := 180;
+  v_max_seconds constant int := 300;
+  v_step_seconds constant int := 30;
+  v_validated_category text := lower(coalesce(p_category, 'gastronomia'));
+  v_time_seconds integer := greatest(0, coalesce(p_presentation_time_seconds, 0));
 begin
-  insert into votes (user_id, team_id)
-  values (p_user_id, p_team_id)
-  on conflict (user_id, team_id)
-  do update set updated_at = now()
+  if v_validated_category not in ('gastronomia', 'ads') then
+    raise exception 'Categoria invalida';
+  end if;
+
+  select coalesce(sum((value->>'score')::numeric(4,1)), 0)::numeric(5,1)
+    into v_base_score
+  from jsonb_array_elements(p_scores) as value;
+
+  if v_time_seconds between v_min_seconds and v_max_seconds then
+    v_time_penalty := 0;
+  elsif v_time_seconds < v_min_seconds then
+    v_time_penalty := floor((v_min_seconds - v_time_seconds)::numeric / v_step_seconds) * 0.1;
+  else
+    v_time_penalty := floor((v_time_seconds - v_max_seconds)::numeric / v_step_seconds) * 0.1;
+  end if;
+
+  v_final_score := greatest(0, v_base_score - v_time_penalty)::numeric(5,1);
+
+  insert into votes (
+    user_id,
+    team_id,
+    category,
+    presentation_time_seconds,
+    time_penalty,
+    base_score,
+    final_score
+  )
+  values (
+    p_user_id,
+    p_team_id,
+    v_validated_category,
+    v_time_seconds,
+    v_time_penalty,
+    v_base_score,
+    v_final_score
+  )
+  on conflict (user_id, team_id, category)
+  do update set
+    presentation_time_seconds = excluded.presentation_time_seconds,
+    time_penalty = excluded.time_penalty,
+    base_score = excluded.base_score,
+    final_score = excluded.final_score,
+    updated_at = now()
   returning id into v_vote_id;
 
   delete from vote_scores where vote_id = v_vote_id;
@@ -114,43 +203,37 @@ $$;
 alter table vote_scores
   alter column score type numeric(4,1) using score::numeric(4,1);
 
+drop function if exists get_ranking(uuid, text);
+drop function if exists get_ranking(uuid);
+
 create or replace function get_ranking(
-  p_course_id uuid
+  p_course_id text,
+  p_category text default 'gastronomia'
 ) returns table (
-  team_id uuid,
+  team_id text,
   team_name text,
-  course_id uuid,
-  avg_percent numeric,
+  course_id text,
+  total_score numeric,
   avg_score numeric,
   total_votes int
 )
 language sql
 stable
 as $$
-  with max_points as (
-    select sum(max) as total_max from criteria
-  ),
-  vote_totals as (
-    select v.id as vote_id,
-           v.team_id,
-           sum(vs.score) as total_score
-    from votes v
-    join vote_scores vs on vs.vote_id = v.id
-    group by v.id, v.team_id
-  )
   select
-    t.id as team_id,
+    t.id::text as team_id,
     t.name as team_name,
-    t.course_id,
-    coalesce(avg(vt.total_score / nullif(mp.total_max, 0)) * 100, 0) as avg_percent,
-    coalesce(avg(vt.total_score) / 3.0, 0) as avg_score,
-    count(vt.vote_id)::int as total_votes
+    t.course_id::text as course_id,
+    coalesce(sum(v.final_score), 0)::numeric(6,1) as total_score,
+    coalesce(avg(v.final_score), 0)::numeric(5,2) as avg_score,
+    count(v.id)::int as total_votes
   from teams t
-  left join vote_totals vt on vt.team_id = t.id
-  cross join max_points mp
-  where t.course_id = p_course_id
-  group by t.id, t.name, t.course_id, mp.total_max
-  order by avg_percent desc, total_votes desc, t.name asc;
+  left join votes v
+    on v.team_id::text = t.id::text
+   and v.category = lower(coalesce(p_category, 'gastronomia'))
+  where t.course_id::text = p_course_id
+  group by t.id, t.name, t.course_id
+  order by total_score desc, avg_score desc, t.name asc;
 $$;
 
 alter table votes enable row level security;
@@ -208,6 +291,5 @@ values
   ('Mercado', 'A equipe possui o entendimento sobre o mercado que atua?', 1, 5, 4),
   ('Equipe', 'A equipe esta bem dimensionada em relacao as atribuicoes desenvolvidas?', 1, 3, 5),
   ('Concorrencia', 'A proposta apresentou vantagens competitivas em relacao aos concorrentes?', 1, 3, 6),
-  ('Visao de futuro', 'A equipe possui metas bem definidas para os proximos anos?', 1, 3, 7),
-  ('Tempo', 'A proposta foi apresentada em ate 5 minutos?', 1, 3, 8)
+  ('Visao de futuro', 'A equipe possui metas bem definidas para os proximos anos?', 1, 3, 7)
 on conflict do nothing;

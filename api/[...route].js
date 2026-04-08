@@ -39,6 +39,7 @@ const supabase =
     : null;
 
 const GASTRONOMY_COURSE_NAME = "Gastronomia";
+const GASTRONOMY_CATEGORY = "gastronomia";
 const GASTRONOMY_TEAMS = [
   "MISE IN PLACE",
   "SEMEIA SABOR",
@@ -54,12 +55,14 @@ const normalizeTeamName = (name = "") =>
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .trim();
+const normalizeCourseName = (name = "") => normalizeTeamName(name);
 
 const allowedTeamKeys = new Set(GASTRONOMY_TEAMS.map(normalizeTeamName));
 const teamOrder = new Map(
   GASTRONOMY_TEAMS.map((name, index) => [normalizeTeamName(name), index]),
 );
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const TIME_CRITERION_TITLE = "Tempo";
 
 const hashPassword = (password) => {
   const salt = randomBytes(16).toString("hex");
@@ -121,6 +124,82 @@ const requireSupabase = (res) => {
   return true;
 };
 
+const getGastronomyCourse = async () => {
+  const { data, error } = await supabase
+    .from("courses")
+    .select("id, name, description");
+
+  if (error) throw error;
+
+  const target = normalizeCourseName(GASTRONOMY_COURSE_NAME);
+  return (data ?? []).find((course) => normalizeCourseName(course.name) === target) ?? null;
+};
+
+const ensureGastronomySeed = async () => {
+  let course = await getGastronomyCourse();
+
+  if (!course) {
+    const { data: createdCourse, error: createCourseError } = await supabase
+      .from("courses")
+      .insert({
+        name: GASTRONOMY_COURSE_NAME,
+        description: "Apresentacoes de projetos gastronomicos e processos criativos.",
+      })
+      .select("id, name, description")
+      .single();
+
+    if (createCourseError) {
+      throw createCourseError;
+    }
+
+    course = createdCourse;
+  }
+
+  const { data: existingTeams, error: teamsError } = await supabase
+    .from("teams")
+    .select("id, name, course_id")
+    .eq("course_id", course.id);
+
+  if (teamsError) {
+    throw teamsError;
+  }
+
+  const existingNames = new Set(
+    (existingTeams ?? []).map((team) => normalizeTeamName(team.name)),
+  );
+
+  const missingTeams = GASTRONOMY_TEAMS.filter(
+    (teamName) => !existingNames.has(normalizeTeamName(teamName)),
+  );
+
+  if (missingTeams.length > 0) {
+    const { error: insertTeamsError } = await supabase.from("teams").insert(
+      missingTeams.map((teamName) => ({
+        course_id: course.id,
+        name: teamName,
+      })),
+    );
+
+    if (insertTeamsError) {
+      throw insertTeamsError;
+    }
+  }
+
+  const { data: allTeams, error: allTeamsError } = await supabase
+    .from("teams")
+    .select("id, name, course_id")
+    .eq("course_id", course.id);
+
+  if (allTeamsError) {
+    throw allTeamsError;
+  }
+
+  return {
+    course,
+    teams: allTeams ?? [],
+  };
+};
+
 const findOrCreateJuror = async (fullName) => {
   const normalizedFullName = String(fullName ?? "").trim();
   if (!normalizedFullName) {
@@ -172,25 +251,6 @@ const findOrCreateJuror = async (fullName) => {
 
   return created;
 };
-
-const getUserFromToken = async (req, res) => {
-  const header = req.headers.authorization ?? "";
-  const token = header.replace("Bearer ", "");
-  if (!token) {
-    res.status(401).json({ error: "Token ausente" });
-    return null;
-  }
-  const session = await getSessionUser(token);
-  if (!session) {
-    res.status(401).json({ error: "Token invalido" });
-    return null;
-  }
-  return session.user;
-};
-
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok" });
-});
 
 app.post("/auth/register", async (req, res) => {
   if (!requireSupabase(res)) return;
@@ -323,20 +383,16 @@ app.get("/bootstrap", async (_req, res) => {
   try {
     if (!requireSupabase(res)) return;
 
-    const [course, criteria] = await Promise.all([
-      supabase
-        .from("courses")
-        .select("id, name, description")
-        .eq("name", GASTRONOMY_COURSE_NAME)
-        .maybeSingle(),
+    const [seeded, criteria] = await Promise.all([
+      ensureGastronomySeed(),
       supabase
         .from("criteria")
         .select("id, title, question, min, max, sort_order")
         .order("sort_order"),
     ]);
 
-    if (course.error || criteria.error) {
-      const detail = course.error?.message ?? criteria.error?.message;
+    if (criteria.error) {
+      const detail = criteria.error?.message;
       res.status(500).json({
         error: "Falha ao carregar dados",
         ...(isDev && detail ? { detail } : {}),
@@ -344,35 +400,28 @@ app.get("/bootstrap", async (_req, res) => {
       return;
     }
 
-    const courseId = course.data?.id;
-    const teams = courseId
-      ? await supabase
-          .from("teams")
-          .select("id, name, course_id")
-          .eq("course_id", courseId)
-          .order("name")
-      : { data: [], error: null };
+    const course = seeded.course;
+    const teamsFromCourse = seeded.teams;
 
-    if (teams.error) {
-      res.status(500).json({
-        error: "Falha ao carregar dados",
-        ...(isDev ? { detail: teams.error.message } : {}),
-      });
-      return;
-    }
-
-    const filteredTeams = (teams.data ?? [])
+    const filteredByAllowlist = teamsFromCourse
       .filter((team) => allowedTeamKeys.has(normalizeTeamName(team.name)))
       .sort(
         (a, b) =>
           (teamOrder.get(normalizeTeamName(a.name)) ?? Number.MAX_SAFE_INTEGER) -
           (teamOrder.get(normalizeTeamName(b.name)) ?? Number.MAX_SAFE_INTEGER),
       );
+    const fallbackTeams = teamsFromCourse.sort((a, b) =>
+      a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }),
+    );
+    const filteredTeams = filteredByAllowlist.length > 0 ? filteredByAllowlist : fallbackTeams;
+    const filteredCriteria = (criteria.data ?? []).filter(
+      (criterion) => criterion.title !== TIME_CRITERION_TITLE,
+    );
 
     res.json({
-      courses: course.data ? [course.data] : [],
+      courses: [course],
       teams: filteredTeams,
-      criteria: criteria.data ?? [],
+      criteria: filteredCriteria,
     });
   } catch (error) {
     console.error("[/bootstrap] Error:", error);
@@ -386,13 +435,10 @@ app.get("/bootstrap", async (_req, res) => {
 app.get("/ranking", async (_req, res) => {
   if (!requireSupabase(res)) return;
 
-  const { data: course, error: courseError } = await supabase
-    .from("courses")
-    .select("id")
-    .eq("name", GASTRONOMY_COURSE_NAME)
-    .maybeSingle();
-
-  if (courseError) {
+  let course;
+  try {
+    course = await getGastronomyCourse();
+  } catch (_error) {
     res
       .status(500)
       .json({ error: "Falha ao carregar curso de Gastronomia" });
@@ -405,7 +451,8 @@ app.get("/ranking", async (_req, res) => {
   }
 
   const { data, error } = await supabase.rpc("get_ranking", {
-    p_course_id: course.id,
+    p_course_id: String(course.id),
+    p_category: GASTRONOMY_CATEGORY,
   });
 
   if (error) {
@@ -413,10 +460,29 @@ app.get("/ranking", async (_req, res) => {
     return;
   }
 
-  const filteredRanking = (data ?? []).filter((item) =>
+  const filteredByAllowlist = (data ?? []).filter((item) =>
     allowedTeamKeys.has(normalizeTeamName(item.team_name)),
   );
-  res.json(filteredRanking);
+  const filteredRanking =
+    filteredByAllowlist.length > 0 ? filteredByAllowlist : (data ?? []);
+
+  const maxCriteriaScore = 27;
+  const normalizedRanking = filteredRanking.map((item) => ({
+    ...item,
+    total_score: Number(item.total_score ?? 0),
+    avg_score: Number(item.avg_score ?? 0),
+    avg_percent:
+      maxCriteriaScore > 0
+        ? Number(
+            (
+              (Number(item.avg_score ?? 0) / maxCriteriaScore) *
+              100
+            ).toFixed(2),
+          )
+        : 0,
+  }));
+
+  res.json(normalizedRanking);
 });
 
 app.get("/jurors/status", async (_req, res) => {
@@ -462,17 +528,46 @@ app.post("/votes", async (req, res) => {
   try {
     if (!requireSupabase(res)) return;
 
-    const { teamId, scores, jurorName } = req.body ?? {};
-    if (!teamId || !Array.isArray(scores) || !String(jurorName ?? "").trim()) {
+    const {
+      teamId,
+      scores,
+      jurorName,
+      category = GASTRONOMY_CATEGORY,
+      presentationTimeSeconds,
+    } = req.body ?? {};
+    if (
+      !teamId ||
+      !Array.isArray(scores) ||
+      !String(jurorName ?? "").trim() ||
+      !Number.isFinite(Number(presentationTimeSeconds))
+    ) {
       res.status(400).json({ error: "Payload invalido" });
+      return;
+    }
+
+    const normalizedCategory = String(category).toLowerCase();
+    if (normalizedCategory !== GASTRONOMY_CATEGORY) {
+      res.status(400).json({ error: "Categoria invalida" });
+      return;
+    }
+
+    let gastronomyCourse;
+    try {
+      gastronomyCourse = await getGastronomyCourse();
+    } catch (_error) {
+      res.status(500).json({ error: "Falha ao validar curso de Gastronomia" });
+      return;
+    }
+
+    if (!gastronomyCourse?.id) {
+      res.status(404).json({ error: "Curso de Gastronomia nao encontrado" });
       return;
     }
 
     const { data: team, error: teamError } = await supabase
       .from("teams")
-      .select("id, name, courses!inner(name)")
+      .select("id, name, course_id")
       .eq("id", teamId)
-      .eq("courses.name", GASTRONOMY_COURSE_NAME)
       .maybeSingle();
 
     if (teamError) {
@@ -481,7 +576,7 @@ app.post("/votes", async (req, res) => {
       return;
     }
 
-    if (!team || !allowedTeamKeys.has(normalizeTeamName(team.name))) {
+    if (!team || team.course_id !== gastronomyCourse.id) {
       res
         .status(400)
         .json({ error: "Somente equipes de Gastronomia podem receber votos" });
@@ -506,6 +601,11 @@ app.post("/votes", async (req, res) => {
     const { error } = await supabase.rpc("submit_vote", {
       p_user_id: juror.id,
       p_team_id: teamId,
+      p_category: normalizedCategory,
+      p_presentation_time_seconds: Math.max(
+        0,
+        Math.floor(Number(presentationTimeSeconds)),
+      ),
       p_scores: scores.map((entry) => ({
         criterionId: entry.criterionId,
         score: Number(entry.score),
@@ -518,11 +618,133 @@ app.post("/votes", async (req, res) => {
       return;
     }
 
-    res.status(201).json({ ok: true });
+    const { data: savedVote, error: savedVoteError } = await supabase
+      .from("votes")
+      .select(
+        "id, user_id, team_id, category, presentation_time_seconds, time_penalty, base_score, final_score, updated_at",
+      )
+      .eq("user_id", juror.id)
+      .eq("team_id", teamId)
+      .eq("category", normalizedCategory)
+      .maybeSingle();
+
+    if (savedVoteError || !savedVote) {
+      res.status(201).json({ ok: true });
+      return;
+    }
+
+    res.status(201).json({
+      ok: true,
+      vote: savedVote,
+    });
   } catch (error) {
     console.error("[/votes] Unexpected error:", error);
     res.status(500).json({
       error: "Erro ao salvar voto",
+      ...(isDev ? { detail: error.message } : {}),
+    });
+  }
+});
+
+app.get("/votes/current", async (req, res) => {
+  try {
+    if (!requireSupabase(res)) return;
+
+    const teamId = String(req.query.teamId ?? "").trim();
+    const jurorName = String(req.query.jurorName ?? "").trim();
+    const category = String(req.query.category ?? GASTRONOMY_CATEGORY).toLowerCase();
+
+    if (!teamId || !jurorName) {
+      res.status(400).json({ error: "teamId e jurorName sao obrigatorios" });
+      return;
+    }
+
+    const { data: juror, error: jurorError } = await supabase
+      .from("app_users")
+      .select("id, full_name")
+      .eq("full_name", jurorName)
+      .maybeSingle();
+
+    if (jurorError) {
+      res.status(500).json({ error: "Falha ao carregar jurado" });
+      return;
+    }
+
+    if (!juror?.id) {
+      res.json({ vote: null });
+      return;
+    }
+
+    const { data: vote, error: voteError } = await supabase
+      .from("votes")
+      .select(
+        "id, user_id, team_id, category, presentation_time_seconds, time_penalty, base_score, final_score, vote_scores(criterion_id, score)",
+      )
+      .eq("user_id", juror.id)
+      .eq("team_id", teamId)
+      .eq("category", category)
+      .maybeSingle();
+
+    if (voteError) {
+      res.status(500).json({ error: "Falha ao carregar avaliacao" });
+      return;
+    }
+
+    res.json({ vote: vote ?? null });
+  } catch (error) {
+    res.status(500).json({
+      error: "Erro ao carregar avaliacao",
+      ...(isDev ? { detail: error.message } : {}),
+    });
+  }
+});
+
+app.delete("/votes", async (req, res) => {
+  try {
+    if (!requireSupabase(res)) return;
+
+    const { teamId, jurorName, category = GASTRONOMY_CATEGORY } = req.body ?? {};
+    const normalizedTeamId = String(teamId ?? "").trim();
+    const normalizedJurorName = String(jurorName ?? "").trim();
+    const normalizedCategory = String(category ?? "").toLowerCase();
+
+    if (!normalizedTeamId || !normalizedJurorName || !normalizedCategory) {
+      res.status(400).json({ error: "Payload invalido" });
+      return;
+    }
+
+    const { data: juror, error: jurorError } = await supabase
+      .from("app_users")
+      .select("id")
+      .eq("full_name", normalizedJurorName)
+      .maybeSingle();
+
+    if (jurorError) {
+      res.status(500).json({ error: "Falha ao localizar jurado" });
+      return;
+    }
+
+    if (!juror?.id) {
+      res.json({ ok: true, deleted: false });
+      return;
+    }
+
+    const { error } = await supabase
+      .from("votes")
+      .delete()
+      .eq("user_id", juror.id)
+      .eq("team_id", normalizedTeamId)
+      .eq("category", normalizedCategory);
+
+    if (error) {
+      res.status(500).json({ error: "Falha ao resetar avaliacao" });
+      return;
+    }
+
+    res.json({ ok: true, deleted: true });
+  } catch (error) {
+    res.status(500).json({
+      error: "Erro ao resetar avaliacao",
       ...(isDev ? { detail: error.message } : {}),
     });
   }

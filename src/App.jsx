@@ -28,20 +28,12 @@ const heroHighlights = [
 
 const DEFAULT_PAGE = "landing";
 const GASTRONOMY_COURSE_NAME = "Gastronomia";
-const TIME_CRITERION_TITLE = "Tempo";
-const TIMER_MIN_SECONDS = 3 * 60;
-const TIMER_MAX_SECONDS = 5 * 60;
+const GASTRONOMY_CATEGORY = "gastronomia";
+const TIME_MIN_SECONDS = 3 * 60;
+const TIME_MAX_SECONDS = 5 * 60;
 const TIMER_PENALTY_STEP_SECONDS = 30;
-const TEAM_FALLBACK_NAMES = [
-  "MISE IN PLACE",
-  "SEMEIA SABOR",
-  "BOAIMPRESSAO!",
-  "GASTROLAB",
-  "G4 DO FUTURO",
-];
 
 const scoreLabels = (criterion) => `${criterion.min} - ${criterion.max}`;
-const isTimeCriterion = (criterion) => criterion.title === TIME_CRITERION_TITLE;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const formatElapsedTime = (seconds) => {
   const safeSeconds = Math.max(0, seconds);
@@ -52,33 +44,34 @@ const formatElapsedTime = (seconds) => {
 const formatScoreValue = (value) =>
   Number.isInteger(value) ? String(value) : value.toFixed(1);
 const formatRankingScore = (value) => Number(value ?? 0).toFixed(1);
-const getTimePenalty = (elapsedSeconds) => {
-  if (elapsedSeconds < TIMER_MIN_SECONDS) {
-    return Math.ceil((TIMER_MIN_SECONDS - elapsedSeconds) / TIMER_PENALTY_STEP_SECONDS) * 0.1;
+const toIdString = (value) => String(value ?? "");
+const normalizeText = (value = "") =>
+  String(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+const isGastronomyCourse = (courseName = "") =>
+  normalizeText(courseName) === normalizeText(GASTRONOMY_COURSE_NAME);
+const getTimePenalty = (seconds) => {
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  if (safeSeconds >= TIME_MIN_SECONDS && safeSeconds <= TIME_MAX_SECONDS) return 0;
+  if (safeSeconds < TIME_MIN_SECONDS) {
+    const diff = TIME_MIN_SECONDS - safeSeconds;
+    return Math.floor(diff / TIMER_PENALTY_STEP_SECONDS) * 0.1;
   }
-
-  if (elapsedSeconds > TIMER_MAX_SECONDS) {
-    return Math.ceil((elapsedSeconds - TIMER_MAX_SECONDS) / TIMER_PENALTY_STEP_SECONDS) * 0.1;
-  }
-
-  return 0;
+  const diff = safeSeconds - TIME_MAX_SECONDS;
+  return Math.floor(diff / TIMER_PENALTY_STEP_SECONDS) * 0.1;
 };
-const getTimeScore = (criterion, elapsedSeconds) =>
-  clamp(criterion.max - getTimePenalty(elapsedSeconds), criterion.min, criterion.max);
 const getTimerStatus = (elapsedSeconds) => {
-  if (elapsedSeconds === 0) {
-    return "Cronômetro pronto para iniciar.";
+  if (!elapsedSeconds) return "Informe o tempo em minutos e segundos.";
+  if (elapsedSeconds >= TIME_MIN_SECONDS && elapsedSeconds <= TIME_MAX_SECONDS) {
+    return "Dentro da faixa sem penalidade (03:00 a 05:00).";
   }
-
-  if (elapsedSeconds < TIMER_MIN_SECONDS) {
-    return "Abaixo do tempo ideal.";
+  if (elapsedSeconds < TIME_MIN_SECONDS) {
+    return "Abaixo da faixa permitida, com penalidade progressiva.";
   }
-
-  if (elapsedSeconds <= TIMER_MAX_SECONDS) {
-    return "Dentro da faixa sem penalidade.";
-  }
-
-  return "Acima do tempo ideal.";
+  return "Acima da faixa permitida, com penalidade progressiva.";
 };
 
 const shellClass =
@@ -103,19 +96,32 @@ export default function App() {
     teams: [],
     criteria: [],
   });
-  const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [scores, setScores] = useState({});
   const [ranking, setRanking] = useState([]);
   const [rankingLoading, setRankingLoading] = useState(false);
   const [voteFeedback, setVoteFeedback] = useState("");
+  const [voteMode, setVoteMode] = useState("create");
+  const [voteLoading, setVoteLoading] = useState(false);
+  const [loadingVote, setLoadingVote] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [existingVote, setExistingVote] = useState(null);
+  const [showResetModal, setShowResetModal] = useState(false);
   const [showTeamSelectionError, setShowTeamSelectionError] = useState(false);
-  const [selectedTeamFallbackName, setSelectedTeamFallbackName] = useState("");
-  const [timerElapsedSeconds, setTimerElapsedSeconds] = useState(0);
-  const [timerRunning, setTimerRunning] = useState(false);
-  const [timerStarted, setTimerStarted] = useState(false);
+  const [presentationMinutes, setPresentationMinutes] = useState(0);
+  const [presentationSeconds, setPresentationSeconds] = useState(0);
   const positionsRef = useRef(new Map());
   const nodesRef = useRef(new Map());
+  const gastronomyCourse = bootstrap.courses.find((course) =>
+    isGastronomyCourse(course.name),
+  );
+  const gastronomyCourseId = toIdString(gastronomyCourse?.id);
+  const gastronomyTeams = gastronomyCourseId
+    ? bootstrap.teams.filter(
+        (team) => toIdString(team.course_id) === gastronomyCourseId,
+      )
+    : bootstrap.teams;
 
   const isConfigured = useMemo(() => Boolean(apiBaseUrl), []);
 
@@ -133,10 +139,12 @@ export default function App() {
   useEffect(() => {
     if (!isConfigured) {
       setStatus("Defina VITE_API_BASE_URL para conectar ao servidor.");
+      setBootstrapLoading(false);
       return;
     }
 
     const loadBootstrap = async () => {
+      setBootstrapLoading(true);
       try {
         const response = await fetch(`${apiBaseUrl}/bootstrap`);
         if (!response.ok) {
@@ -145,14 +153,10 @@ export default function App() {
         const data = await response.json();
         setBootstrap(data);
         setStatus("Sistema pronto para votar.");
-        const gastronomia = (data.courses ?? []).find(
-          (course) => course.name === GASTRONOMY_COURSE_NAME,
-        );
-        if (gastronomia) {
-          setSelectedCourseId(gastronomia.id);
-        }
       } catch (error) {
         setStatus("Não foi possível carregar os dados do evento.");
+      } finally {
+        setBootstrapLoading(false);
       }
     };
 
@@ -164,23 +168,23 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!selectedCourseId) return;
-    fetchRanking(selectedCourseId);
-  }, [selectedCourseId]);
+    if (!gastronomyCourseId) return;
+    fetchRanking(gastronomyCourseId);
+  }, [gastronomyCourseId]);
 
   useEffect(() => {
-    if (!supabase || !selectedCourseId) return;
+    if (!supabase || !gastronomyCourseId) return;
 
     const channel = supabase.channel("votes-ranking");
     channel.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "vote_scores" },
-      () => fetchRanking(selectedCourseId, true),
+      () => fetchRanking(gastronomyCourseId, true),
     );
     channel.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "votes" },
-      () => fetchRanking(selectedCourseId, true),
+      () => fetchRanking(gastronomyCourseId, true),
     );
 
     channel.subscribe();
@@ -188,33 +192,23 @@ export default function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedCourseId]);
+  }, [gastronomyCourseId]);
 
   useEffect(() => {
     if (!selectedTeamId) return;
     const nextScores = {};
     bootstrap.criteria.forEach((criterion) => {
-      if (!isTimeCriterion(criterion)) {
-        nextScores[criterion.id] = criterion.min;
-      }
+      nextScores[criterion.id] = criterion.min;
     });
     setScores(nextScores);
-    setTimerElapsedSeconds(0);
-    setTimerRunning(false);
-    setTimerStarted(false);
+    setPresentationMinutes(0);
+    setPresentationSeconds(0);
+    setVoteMode("create");
+    setLoadError("");
+    setExistingVote(null);
     setVoteFeedback("");
     setShowTeamSelectionError(false);
   }, [selectedTeamId, bootstrap.criteria]);
-
-  useEffect(() => {
-    if (!timerRunning) return undefined;
-
-    const intervalId = window.setInterval(() => {
-      setTimerElapsedSeconds((current) => current + 1);
-    }, 1000);
-
-    return () => window.clearInterval(intervalId);
-  }, [timerRunning]);
 
   useLayoutEffect(() => {
     const nodes = nodesRef.current;
@@ -286,6 +280,101 @@ export default function App() {
     }
   };
 
+  const clearLocalForm = () => {
+    const nextScores = {};
+    bootstrap.criteria.forEach((criterion) => {
+      nextScores[criterion.id] = criterion.min;
+    });
+    setScores(nextScores);
+    setPresentationMinutes(0);
+    setPresentationSeconds(0);
+    setVoteFeedback("");
+    setVoteMode("create");
+    setLoadError("");
+    setExistingVote(null);
+    setShowResetModal(false);
+  };
+
+  useEffect(() => {
+    const loadExistingVote = async () => {
+      if (!selectedTeamId || !jurorName.trim()) {
+        setVoteMode("create");
+        setExistingVote(null);
+        setLoadError("");
+        const nextScores = {};
+        bootstrap.criteria.forEach((criterion) => {
+          nextScores[criterion.id] = criterion.min;
+        });
+        setScores(nextScores);
+        setPresentationMinutes(0);
+        setPresentationSeconds(0);
+        return;
+      }
+
+      setLoadingVote(true);
+      setLoadError("");
+      try {
+        const params = new URLSearchParams({
+          teamId: selectedTeamId,
+          jurorName: jurorName.trim(),
+          category: GASTRONOMY_CATEGORY,
+        });
+        const response = await fetch(`${apiBaseUrl}/votes/current?${params}`);
+        if (!response.ok) throw new Error("Falha ao carregar avaliacao");
+        const data = await response.json();
+        const vote = data?.vote;
+
+        if (!vote) {
+          setVoteMode("create");
+          setExistingVote(null);
+          const nextScores = {};
+          bootstrap.criteria.forEach((criterion) => {
+            nextScores[criterion.id] = criterion.min;
+          });
+          setScores(nextScores);
+          setPresentationMinutes(0);
+          setPresentationSeconds(0);
+          return;
+        }
+
+        const nextScores = {};
+        bootstrap.criteria.forEach((criterion) => {
+          nextScores[criterion.id] = criterion.min;
+        });
+
+        (vote.vote_scores ?? []).forEach((entry) => {
+          if (entry?.criterion_id) {
+            nextScores[entry.criterion_id] = Number(entry.score);
+          }
+        });
+
+        setScores(nextScores);
+        const totalSeconds = Math.max(0, Number(vote.presentation_time_seconds) || 0);
+        setPresentationMinutes(Math.floor(totalSeconds / 60));
+        setPresentationSeconds(totalSeconds % 60);
+        setVoteMode("edit");
+        setExistingVote(vote);
+      } catch (_error) {
+        setVoteMode("create");
+        setExistingVote(null);
+        setLoadError(
+          "Nao foi possivel carregar a avaliacao existente. Tente novamente.",
+        );
+        const nextScores = {};
+        bootstrap.criteria.forEach((criterion) => {
+          nextScores[criterion.id] = criterion.min;
+        });
+        setScores(nextScores);
+        setPresentationMinutes(0);
+        setPresentationSeconds(0);
+      } finally {
+        setLoadingVote(false);
+      }
+    };
+
+    loadExistingVote();
+  }, [selectedTeamId, jurorName, bootstrap.criteria]);
+
   const handleVoteSubmit = async (event) => {
     event.preventDefault();
     setShowTeamSelectionError(false);
@@ -295,32 +384,24 @@ export default function App() {
       return;
     }
 
-    if (!selectedTeamId && !selectedTeamFallbackName) {
+    if (!selectedTeamId) {
       setShowTeamSelectionError(true);
-      return;
-    }
-
-    if (!selectedTeamId && selectedTeamFallbackName) {
-      setVoteFeedback(
-        "Equipe selecionada visualmente, mas os dados do backend nao carregaram. Recarregue a pagina e tente novamente.",
-      );
-      return;
-    }
-
-    const timeCriterion = bootstrap.criteria.find(isTimeCriterion);
-    if (timeCriterion && !timerStarted) {
-      setVoteFeedback("Inicie o cronometro antes de salvar o voto.");
       return;
     }
 
     const payload = bootstrap.criteria.map((criterion) => ({
       criterionId: criterion.id,
-      score: isTimeCriterion(criterion)
-        ? Number(getTimeScore(criterion, timerElapsedSeconds).toFixed(1))
-        : scores[criterion.id] ?? criterion.min,
+      score: scores[criterion.id] ?? criterion.min,
     }));
 
+    const normalizedSeconds = clamp(
+      Number(presentationMinutes || 0) * 60 + Number(presentationSeconds || 0),
+      0,
+      60 * 59 + 59,
+    );
+
     try {
+      setVoteLoading(true);
       const response = await fetch(`${apiBaseUrl}/votes`, {
         method: "POST",
         headers: {
@@ -329,6 +410,8 @@ export default function App() {
         body: JSON.stringify({
           teamId: selectedTeamId,
           jurorName: jurorName.trim(),
+          category: GASTRONOMY_CATEGORY,
+          presentationTimeSeconds: normalizedSeconds,
           scores: payload,
         }),
       });
@@ -338,56 +421,96 @@ export default function App() {
         throw new Error(payload.error ?? "Falha ao salvar voto");
       }
 
-      setVoteFeedback("Voto registrado com sucesso.");
-      setTimerRunning(false);
-      fetchRanking(selectedCourseId, true);
+      setVoteFeedback(
+        voteMode === "edit"
+          ? "Avaliacao atualizada com sucesso."
+          : "Avaliacao salva com sucesso.",
+      );
+      setVoteMode("edit");
+      if (gastronomyCourseId) {
+        fetchRanking(gastronomyCourseId, true);
+      }
       fetchJurorsStatus(true);
     } catch (error) {
       setVoteFeedback(error.message ?? "Nao foi possivel registrar o voto.");
+    } finally {
+      setVoteLoading(false);
     }
   };
 
-  const gastronomiaCourse = bootstrap.courses.find(
-    (course) => course.name === GASTRONOMY_COURSE_NAME,
+  const handleVoteReset = async () => {
+    if (!selectedTeamId) {
+      setVoteFeedback("Selecione uma equipe antes de resetar.");
+      return;
+    }
+
+    if (!jurorName.trim()) {
+      setVoteFeedback("Informe o nome do jurado.");
+      return;
+    }
+
+    setShowResetModal(true);
+  };
+
+  const confirmVoteReset = async () => {
+    try {
+      setShowResetModal(false);
+      setVoteLoading(true);
+      const response = await fetch(`${apiBaseUrl}/votes`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          teamId: selectedTeamId,
+          jurorName: jurorName.trim(),
+          category: GASTRONOMY_CATEGORY,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Falha ao resetar avaliacao");
+      }
+
+      clearLocalForm();
+      if (gastronomyCourseId) {
+        fetchRanking(gastronomyCourseId, true);
+      }
+      fetchJurorsStatus(true);
+      setVoteFeedback("Avaliacao resetada e removida do banco.");
+    } catch (error) {
+      setVoteFeedback(error.message ?? "Nao foi possivel resetar a avaliacao.");
+    } finally {
+      setVoteLoading(false);
+    }
+  };
+
+  const displayedTeams = gastronomyTeams;
+  const selectedTeam = displayedTeams.find(
+    (team) => toIdString(team.id) === toIdString(selectedTeamId),
   );
-  const selectedCourseIdSafe = selectedCourseId || gastronomiaCourse?.id || "";
-  const courseTeams = bootstrap.teams.filter(
-    (team) => team.course_id === selectedCourseIdSafe,
+  const presentationTimeSeconds = clamp(
+    Number(presentationMinutes || 0) * 60 + Number(presentationSeconds || 0),
+    0,
+    60 * 59 + 59,
   );
-  const useFallbackTeams = courseTeams.length === 0;
-  const displayedTeams = useFallbackTeams
-    ? TEAM_FALLBACK_NAMES.map((name) => ({
-        id: `fallback:${name}`,
-        name,
-        isFallback: true,
-      }))
-    : courseTeams.map((team) => ({
-        id: team.id,
-        name: team.name,
-        isFallback: false,
-      }));
-  const selectedTeam = courseTeams.find((team) => team.id === selectedTeamId);
-  const timeCriterion = bootstrap.criteria.find(isTimeCriterion);
-  const timePenalty = timeCriterion ? getTimePenalty(timerElapsedSeconds) : 0;
-  const timeScore = timeCriterion
-    ? getTimeScore(timeCriterion, timerElapsedSeconds)
-    : 0;
-  const timerStatus = getTimerStatus(timerElapsedSeconds);
+  const timePenalty = getTimePenalty(presentationTimeSeconds);
+  const baseScore = bootstrap.criteria.reduce(
+    (acc, criterion) => acc + (scores[criterion.id] ?? criterion.min),
+    0,
+  );
+  const finalScore = Math.max(0, Number((baseScore - timePenalty).toFixed(1)));
+  const timerStatus = getTimerStatus(presentationTimeSeconds);
 
   useEffect(() => {
     if (
       selectedTeamId &&
-      !courseTeams.some((team) => team.id === selectedTeamId)
+      !displayedTeams.some(
+        (team) => toIdString(team.id) === toIdString(selectedTeamId),
+      )
     ) {
       setSelectedTeamId("");
     }
-  }, [selectedTeamId, courseTeams]);
-
-  useEffect(() => {
-    if (!useFallbackTeams) {
-      setSelectedTeamFallbackName("");
-    }
-  }, [useFallbackTeams]);
+  }, [selectedTeamId, displayedTeams]);
 
   const renderLanding = () => (
     <div className="mx-auto w-full max-w-[min(96vw,1180px)] px-[clamp(12px,2.6vw,34px)] pb-[clamp(16px,3vw,30px)]">
@@ -435,11 +558,11 @@ export default function App() {
               Status ao vivo
             </p>
             <h2 className="m-0 text-[1.08rem] font-bold leading-[1.08] text-deep xl:text-[1.18rem] xl:leading-[1.1]">
-              Placar
+              Placar - Ficthon 2026
             </h2>
             <ul className="mt-2.5 list-disc space-y-1 pl-4 text-[0.84rem] leading-[1.45] text-ash">
               <li>Ranking de Gastronomia</li>
-              <li>Média da equipe dividida por 3</li>
+              <li>Soma de notas finais por equipe</li>
               <li>Animação de subida/queda</li>
             </ul>
             <div className="mt-3 rounded-xl bg-deep/5 px-3 py-2.5 font-semibold text-deep">
@@ -491,16 +614,16 @@ export default function App() {
             </div>
           </div>
           <div className="grid gap-2.5 md:grid-cols-2 xl:gap-3">
-            {gastronomiaCourse && (
+            {gastronomyCourse && (
               <article
-                key={gastronomiaCourse.id}
+                key={gastronomyCourse.id}
                 className={`${shellClass} p-3 xl:min-h-[112px]`}
               >
                 <h3 className="mb-1 text-[0.96rem] font-bold text-deep">
-                  {gastronomiaCourse.name}
+                  {gastronomyCourse.name}
                 </h3>
                 <p className="text-[0.9rem] leading-[1.45] text-ash">
-                  {gastronomiaCourse.description}
+                  {gastronomyCourse.description}
                 </p>
               </article>
             )}
@@ -666,27 +789,27 @@ export default function App() {
                   key={team.id}
                   type="button"
                   className={`rounded-full border px-3.5 py-2 text-[0.86rem] font-bold transition ${
-                    (team.isFallback && selectedTeamFallbackName === team.name) ||
-                    (!team.isFallback && team.id === selectedTeamId)
+                    toIdString(team.id) === toIdString(selectedTeamId)
                       ? "border-transparent bg-sunset/25 text-deep shadow-soft ring-2 ring-[#dba85f]/45"
                       : "border-[#8d673c]/20 bg-[#fffaf0]/80 text-deep hover:bg-deep/5"
                   }`}
                   onClick={() => {
-                    if (team.isFallback) {
-                      setSelectedTeamFallbackName(team.name);
-                      setSelectedTeamId("");
-                    } else {
-                      setSelectedTeamId(team.id);
-                      setSelectedTeamFallbackName("");
-                    }
+                    setSelectedTeamId(toIdString(team.id));
                     setShowTeamSelectionError(false);
+                    setLoadError("");
+                    setExistingVote(null);
                   }}
                 >
                   {team.name}
                 </button>
               ))}
             </div>
-            {showTeamSelectionError && !selectedTeamFallbackName && (
+            {!bootstrapLoading && !displayedTeams.length && (
+              <p className="text-[0.9rem] text-ash">
+                Nenhuma equipe de Gastronomia foi encontrada.
+              </p>
+            )}
+            {showTeamSelectionError && (
               <p className="text-[0.9rem] font-semibold text-[#8d2c1c]">
                 Selecione a equipe.
               </p>
@@ -697,18 +820,18 @@ export default function App() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
-                  Cronometro
+                  Tempo da apresentacao
                 </p>
                 <h3 className="mt-1 text-base font-bold text-deep">
-                  Controle do tempo da apresentacao
+                  Regra de penalidade automatica
                 </h3>
                 <p className="text-[0.85rem] leading-[1.45] text-ash">
-                  Entre 3:00 e 5:00 não perde pontos. Fora dessa faixa, perde 0,1 a cada 30 segundos.
+                  Sem penalidade entre 03:00 e 05:00. Fora dessa faixa, perde 0,1 a cada 30 segundos completos.
                 </p>
               </div>
               <div className="w-full rounded-2xl border border-[#8d673c]/25 bg-white/60 px-4 py-4 text-center shadow-soft lg:w-[260px] lg:text-right">
                 <strong className="block text-[1.8rem] font-extrabold tracking-[0.06em] text-deep">
-                  {formatElapsedTime(timerElapsedSeconds)}
+                  {formatElapsedTime(presentationTimeSeconds)}
                 </strong>
                 <span className="text-[0.8rem] font-semibold text-ash">
                   {timerStatus}
@@ -716,122 +839,94 @@ export default function App() {
               </div>
             </div>
             <div className="grid gap-3 rounded-2xl border border-[#8d673c]/20 bg-[#fffaf0]/80 p-4 md:grid-cols-[1fr_auto] md:items-center">
-              <div className="grid gap-1 text-[0.85rem] text-ash">
+              <div className="grid gap-2 text-[0.85rem] text-ash">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="grid gap-1">
+                    <span className="text-[0.75rem] uppercase tracking-[0.08em]">Min</span>
+                    <input
+                      className="w-[84px] rounded-xl border border-[#8d673c]/30 bg-white px-2.5 py-1.5 text-[0.9rem] text-deep outline-none"
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={presentationMinutes}
+                      onChange={(event) =>
+                        setPresentationMinutes(
+                          clamp(Number(event.target.value || 0), 0, 59),
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[0.75rem] uppercase tracking-[0.08em]">Seg</span>
+                    <input
+                      className="w-[84px] rounded-xl border border-[#8d673c]/30 bg-white px-2.5 py-1.5 text-[0.9rem] text-deep outline-none"
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={presentationSeconds}
+                      onChange={(event) =>
+                        setPresentationSeconds(
+                          clamp(Number(event.target.value || 0), 0, 59),
+                        )
+                      }
+                    />
+                  </label>
+                </div>
                 <span>
                   Penalidade atual:{" "}
                   <strong className="text-deep">
                     {timePenalty > 0 ? `-${timePenalty.toFixed(1)}` : "sem perda"}
                   </strong>
                 </span>
-                {timeCriterion && (
-                  <span>
-                    Nota de Tempo:{" "}
-                    <strong className="text-deep">
-                      {formatScoreValue(timeScore)} / {timeCriterion.max}
-                    </strong>
-                  </span>
-                )}
+                <span>
+                  Nota final prevista:{" "}
+                  <strong className="text-deep">{formatScoreValue(finalScore)}</strong>
+                </span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  className={actionClass}
-                  type="button"
-                  onClick={() => {
-                    setTimerStarted(true);
-                    setTimerRunning(true);
-                  }}
-                >
-                  {timerStarted ? "Retomar" : "Iniciar"}
-                </button>
-                <button
-                  className={secondaryActionClass}
-                  type="button"
-                  onClick={() => setTimerRunning(false)}
-                  disabled={!timerRunning}
-                >
-                  Pausar
-                </button>
+              <div className="flex flex-wrap gap-2 justify-start md:justify-end">
                 <button
                   className={secondaryActionClass}
                   type="button"
                   onClick={() => {
-                    setTimerElapsedSeconds(0);
-                    setTimerRunning(false);
-                    setTimerStarted(false);
+                    setPresentationMinutes(0);
+                    setPresentationSeconds(0);
                   }}
                 >
-                  Reiniciar
+                  Limpar tempo
                 </button>
               </div>
             </div>
           </div>
 
           <div className={`${shellClass} grid gap-3 p-[18px]`}>
-            <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
-              Avaliacao
-            </p>
-            <h3 className="text-base font-bold text-deep">
-              {selectedTeam ? `Equipe ${selectedTeam.name}` : "Avaliacao da equipe"}
-            </h3>
-            <form className="grid gap-3" onSubmit={handleVoteSubmit}>
-              {bootstrap.criteria.map((criterion, index) => (
-                <div
-                  key={criterion.id}
-                  className={`grid gap-1.5 font-semibold text-deep ${index > 0 ? "border-t border-deep/20 pt-2.5" : ""}`}
-                >
-                  <span className="grid gap-0.5">
-                    <strong>{criterion.title}</strong>
-                    <small className="text-[0.85rem] font-normal text-ash">
-                      {criterion.question}
-                    </small>
-                  </span>
-                  {isTimeCriterion(criterion) ? (
-                    <div className="rounded-2xl border border-[#8d673c]/20 bg-[#fffaf0]/80 p-3">
-                      <div className="flex items-center justify-between gap-3 text-[0.8rem] text-ash">
-                        <span>Faixa ideal: 03:00 ate 05:00</span>
-                        <strong className="text-deep">
-                          {formatScoreValue(timeScore)}
-                        </strong>
-                      </div>
-                      <div className="mt-2 h-[7px] overflow-hidden rounded-full bg-deep/10">
-                        <span
-                          className="block h-full bg-bar-fill transition-[width] duration-300 ease-out"
-                          style={{
-                            width: `${((timeScore - criterion.min) / (criterion.max - criterion.min || 1)) * 100}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      <input
-                        className="w-full accent-sky"
-                        type="range"
-                        min={criterion.min}
-                        max={criterion.max}
-                        value={scores[criterion.id] ?? criterion.min}
-                        onChange={(event) =>
-                          setScores((current) => ({
-                            ...current,
-                            [criterion.id]: Number(event.target.value),
-                          }))
-                        }
-                      />
-                      <div className="flex items-center justify-between text-[0.76rem] text-ash">
-                        <span>{scoreLabels(criterion)}</span>
-                        <strong className="text-deep">
-                          {scores[criterion.id] ?? criterion.min}
-                        </strong>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-              <button className={actionClass} type="submit">
-                Salvar voto
-              </button>
-            </form>
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
+                  Proxima etapa
+                </p>
+                <h3 className="text-base font-bold text-deep">
+                  Abrir avaliacao da equipe
+                </h3>
+                <p className="text-[0.88rem] leading-[1.45] text-ash">
+                  Depois de escolher a equipe e revisar o tempo, avance para preencher as notas.
+                </p>
+              </div>
+              <a
+                className={actionClass}
+                href={selectedTeamId ? "#avaliar" : "#votar"}
+                onClick={(event) => {
+                  if (!selectedTeamId) {
+                    event.preventDefault();
+                    setShowTeamSelectionError(true);
+                    setVoteFeedback("Selecione uma equipe antes de continuar.");
+                  }
+                }}
+              >
+                Proximo
+              </a>
+            </div>
           </div>
+
         </section>
 
         <aside className={`${shellClass} h-fit p-4 xl:sticky xl:top-4`}>
@@ -840,11 +935,218 @@ export default function App() {
               Ranking ao vivo
             </p>
             <h3 className="text-base font-bold text-deep">
-              {gastronomiaCourse?.name ?? "Gastronomia"}
+              {gastronomyCourse?.name ?? "Gastronomia"}
             </h3>
           </div>
           <p className="mb-3 text-[0.88rem] leading-[1.45] text-ash">
             O ranking fica visivel o tempo todo para facilitar a navegacao no celular e no computador.
+          </p>
+          <RankingList
+            items={ranking}
+            loading={rankingLoading}
+            nodesRef={nodesRef}
+            showVotes
+          />
+        </aside>
+      </main>
+    </div>
+  );
+
+  const renderEvaluation = () => (
+    <div className="mx-auto w-full max-w-[min(98vw,1320px)] px-[clamp(12px,2.6vw,34px)] py-[clamp(14px,2.8vw,30px)]">
+      <header className="flex flex-col items-start justify-between gap-4 pb-4 md:flex-row md:items-end">
+        <div>
+          <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
+            Avaliacao
+          </p>
+          <h1 className="text-[clamp(1.7rem,3vw,3rem)] font-extrabold leading-[1.02] text-deep">
+            {selectedTeam ? `Notas da equipe ${selectedTeam.name}` : "Notas da equipe"}
+          </h1>
+          <p className="max-w-[62ch] text-[0.98rem] leading-[1.5] text-ash">
+            Defina as notas por clique e salve a avaliacao da apresentacao.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <a className={secondaryActionClass} href="#votar">
+            Voltar
+          </a>
+        </div>
+      </header>
+
+      <main className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
+        <section className={`${shellClass} grid gap-3 p-[18px]`}>
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
+                Equipe selecionada
+              </p>
+              <h3 className="text-base font-bold text-deep">
+                {selectedTeam ? selectedTeam.name : "Nenhuma equipe selecionada"}
+              </h3>
+            </div>
+            <div className="rounded-full bg-deep/5 px-3 py-1.5 text-[0.78rem] font-semibold text-ash">
+              Base {formatScoreValue(baseScore)} | Final {formatScoreValue(finalScore)}
+            </div>
+          </div>
+          {!selectedTeamId && (
+            <p className="text-[0.9rem] font-semibold text-[#8d2c1c]">
+              Selecione uma equipe na pagina anterior para continuar.
+            </p>
+          )}
+          {loadingVote && (
+            <p className="text-[0.9rem] text-ash">Carregando avaliacao...</p>
+          )}
+          {!loadingVote && Boolean(loadError) && (
+            <p className="text-[0.9rem] font-semibold text-[#8d2c1c]">
+              {loadError}
+            </p>
+          )}
+          {!loadingVote && !loadError && selectedTeamId && !existingVote && (
+            <p className="text-[0.9rem] text-ash">
+              Nenhuma avaliacao anterior encontrada. Preencha e salve normalmente.
+            </p>
+          )}
+          <form className="grid gap-3" onSubmit={handleVoteSubmit}>
+            {bootstrap.criteria.map((criterion, index) => (
+              <div
+                key={criterion.id}
+                className={`grid gap-2 font-semibold text-deep ${index > 0 ? "border-t border-deep/20 pt-3" : ""}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="grid gap-0.5">
+                    <strong>{criterion.title}</strong>
+                    <small className="text-[0.85rem] font-normal text-ash">
+                      {criterion.question}
+                    </small>
+                  </span>
+                  <span className="rounded-full bg-sky/15 px-2.5 py-1 text-[0.78rem] font-bold text-deep">
+                    Nota {scores[criterion.id] ?? criterion.min}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {Array.from(
+                    { length: criterion.max - criterion.min + 1 },
+                    (_, valueIndex) => criterion.min + valueIndex,
+                  ).map((value) => {
+                    const isSelected = (scores[criterion.id] ?? criterion.min) === value;
+                    return (
+                      <button
+                        key={`${criterion.id}-${value}`}
+                        type="button"
+                        className={`min-w-[46px] rounded-xl border px-3 py-2 text-[0.9rem] font-bold transition ${
+                          isSelected
+                            ? "border-transparent bg-[linear-gradient(140deg,#e7bf86,#d7a160)] text-deep shadow-soft ring-2 ring-[#dba85f]/45"
+                            : "border-[#8d673c]/25 bg-[#fffaf0]/90 text-deep hover:bg-deep/5"
+                        }`}
+                        onClick={() =>
+                          setScores((current) => ({
+                            ...current,
+                            [criterion.id]: value,
+                          }))
+                        }
+                      >
+                        {value}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="text-[0.76rem] text-ash">
+                  Clique para definir a nota entre {scoreLabels(criterion)}.
+                </div>
+              </div>
+            ))}
+            <div className="grid gap-1 rounded-2xl border border-[#8d673c]/20 bg-[#fffaf0]/80 px-3.5 py-3 text-[0.88rem] text-ash md:grid-cols-3">
+              <span>
+                Pontuacao base:{" "}
+                <strong className="text-deep">{formatScoreValue(baseScore)}</strong>
+              </span>
+              <span>
+                Penalidade por tempo:{" "}
+                <strong className="text-deep">
+                  {timePenalty > 0 ? `-${timePenalty.toFixed(1)}` : "0.0"}
+                </strong>
+              </span>
+              <span>
+                Nota final:{" "}
+                <strong className="text-deep">{formatScoreValue(finalScore)}</strong>
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className={actionClass}
+                type="submit"
+                disabled={voteLoading || loadingVote || !selectedTeamId}
+              >
+                {voteMode === "edit" ? "Atualizar avaliacao" : "Salvar avaliacao"}
+              </button>
+              <button
+                className={secondaryActionClass}
+                type="button"
+                onClick={clearLocalForm}
+                disabled={voteLoading || loadingVote}
+              >
+                Limpar formulario
+              </button>
+              <button
+                className={secondaryActionClass}
+                type="button"
+                onClick={handleVoteReset}
+                disabled={voteLoading || loadingVote || !selectedTeamId}
+              >
+                Resetar avaliacao
+              </button>
+            </div>
+              {voteFeedback && (
+                <p className="text-[0.9rem] font-semibold text-deep">{voteFeedback}</p>
+              )}
+            </form>
+
+            {showResetModal && (
+              <div className="fixed inset-0 z-50 grid place-items-center bg-[rgba(41,27,11,0.35)] px-4">
+                <div className="w-full max-w-[460px] rounded-[24px] border border-[#8d673c]/30 bg-[linear-gradient(165deg,rgba(254,248,234,0.98),rgba(243,230,204,0.97)_52%,rgba(236,218,186,0.98))] p-5 shadow-[0_26px_60px_rgba(58,35,12,0.24)]">
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
+                    Confirmar reset
+                  </p>
+                  <h4 className="mt-1 text-[1.1rem] font-bold text-deep">
+                    Resetar avaliacao salva?
+                  </h4>
+                  <p className="mt-2 text-[0.92rem] leading-[1.5] text-ash">
+                    Essa acao apaga a avaliacao desta equipe no banco e atualiza o ranking ao vivo.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      className={secondaryActionClass}
+                      type="button"
+                      onClick={() => setShowResetModal(false)}
+                      disabled={voteLoading}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      className={actionClass}
+                      type="button"
+                      onClick={confirmVoteReset}
+                      disabled={voteLoading}
+                    >
+                      Confirmar reset
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+        </section>
+
+        <aside className={`${shellClass} h-fit p-4 xl:sticky xl:top-4`}>
+          <div className="mb-2">
+            <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
+              Ranking ao vivo
+            </p>
+            <h3 className="text-base font-bold text-deep">
+              {gastronomyCourse?.name ?? "Gastronomia"}
+            </h3>
+          </div>
+          <p className="mb-3 text-[0.88rem] leading-[1.45] text-ash">
+            Consulte o placar enquanto preenche a avaliacao.
           </p>
           <RankingList
             items={ranking}
@@ -863,6 +1165,10 @@ export default function App() {
 
   if (page === "votar") {
     return <VintageFrame>{renderVoting()}</VintageFrame>;
+  }
+
+  if (page === "avaliar") {
+    return <VintageFrame>{renderEvaluation()}</VintageFrame>;
   }
 
   return <VintageFrame>{renderLanding()}</VintageFrame>;
@@ -909,6 +1215,7 @@ function RankingList({ items, loading, nodesRef, showVotes = false }) {
               />
             </div>
             <div className="flex gap-2 text-[0.76rem] text-ash">
+              <span>Total {formatRankingScore(item.total_score)}</span>
               <span>Media {formatRankingScore(item.avg_score)}</span>
               {showVotes && <span>{item.total_votes} votos</span>}
             </div>
