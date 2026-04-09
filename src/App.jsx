@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // Prioridade: VITE_API_BASE_URL > localhost:3001 em dev > /api em produção
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL 
+const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL
   ? import.meta.env.VITE_API_BASE_URL
   : import.meta.env.DEV
     ? "http://localhost:3001"
     : "/api";
+const apiBaseUrl = rawApiBaseUrl.replace(/\/+$/, "");
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 

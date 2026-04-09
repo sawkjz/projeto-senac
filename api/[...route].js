@@ -9,12 +9,12 @@ const port = process.env.PORT || 3001;
 const isDev = process.env.NODE_ENV !== "production";
 const apiBaseUrl = process.env.API_BASE_URL || process.env.VITE_API_BASE_URL || "/api";
 
-// CORS configurado para aceitar requisições de qualquer origem
+// API publica para qualquer frontend, sem cookies/sessao.
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: false
+  credentials: false,
 }));
 app.use(express.json());
 
