@@ -77,9 +77,9 @@ const getTimerStatus = (elapsedSeconds) => {
 const shellClass =
   "rounded-[20px] border border-[#7b5b33]/35 bg-[linear-gradient(160deg,rgba(255,248,230,0.95),rgba(245,232,206,0.96))] shadow-[0_14px_28px_rgba(61,40,16,0.14)]";
 const actionClass =
-  "inline-flex items-center justify-center rounded-full border border-[#8d673c]/35 bg-[linear-gradient(140deg,#f5d9a6,#e7bf86_55%,#dfb578)] px-4 py-2 text-[0.84rem] font-bold text-ink shadow-[0_8px_20px_rgba(64,41,14,0.2)] transition hover:brightness-[1.05]";
+  "inline-flex items-center justify-center rounded-full border border-[#8d673c]/35 bg-[linear-gradient(140deg,#f5d9a6,#e7bf86_55%,#dfb578)] px-3 py-1.5 text-[0.8rem] font-bold text-ink shadow-[0_8px_20px_rgba(64,41,14,0.2)] transition hover:brightness-[1.05] md:px-4 md:py-2 md:text-[0.84rem]";
 const secondaryActionClass =
-  "inline-flex items-center justify-center rounded-full border border-[#87613a]/45 bg-[#f6ead1]/65 px-3.5 py-2 text-[0.82rem] font-semibold text-ink transition hover:bg-[#f0dfbd]";
+  "inline-flex items-center justify-center rounded-full border border-[#87613a]/45 bg-[#f6ead1]/65 px-3 py-1.5 text-[0.8rem] font-semibold text-ink transition hover:bg-[#f0dfbd] md:px-3.5 md:py-2 md:text-[0.82rem]";
 
 export default function App() {
   const [page, setPage] = useState(DEFAULT_PAGE);
@@ -201,8 +201,6 @@ export default function App() {
       nextScores[criterion.id] = criterion.min;
     });
     setScores(nextScores);
-    setPresentationMinutes(0);
-    setPresentationSeconds(0);
     setVoteMode("create");
     setLoadError("");
     setExistingVote(null);
@@ -306,8 +304,6 @@ export default function App() {
           nextScores[criterion.id] = criterion.min;
         });
         setScores(nextScores);
-        setPresentationMinutes(0);
-        setPresentationSeconds(0);
         return;
       }
 
@@ -332,8 +328,6 @@ export default function App() {
             nextScores[criterion.id] = criterion.min;
           });
           setScores(nextScores);
-          setPresentationMinutes(0);
-          setPresentationSeconds(0);
           return;
         }
 
@@ -365,8 +359,6 @@ export default function App() {
           nextScores[criterion.id] = criterion.min;
         });
         setScores(nextScores);
-        setPresentationMinutes(0);
-        setPresentationSeconds(0);
       } finally {
         setLoadingVote(false);
       }
@@ -388,7 +380,6 @@ export default function App() {
       setShowTeamSelectionError(true);
       return;
     }
-
     const payload = bootstrap.criteria.map((criterion) => ({
       criterionId: criterion.id,
       score: scores[criterion.id] ?? criterion.min,
@@ -513,23 +504,18 @@ export default function App() {
   }, [selectedTeamId, displayedTeams]);
 
   const renderLanding = () => (
-    <div className="mx-auto w-full max-w-[min(96vw,1180px)] px-[clamp(12px,2.6vw,34px)] pb-[clamp(16px,3vw,30px)]">
-      <header className="pt-2 xl:pt-3">
-        <nav className="flex items-center justify-center gap-3 py-1.5 text-center xl:py-2">
-          <span className="text-[1.16rem] font-extrabold tracking-[0.02em] text-deep">
-            Voto Ao Vivo
-          </span>
-        </nav>
+    <div className="mx-auto w-full max-w-[90vw] px-[20px] pb-3 md:max-w-[min(96vw,1180px)] md:px-[clamp(12px,2.6vw,34px)] md:pb-[clamp(16px,3vw,30px)]">
+      <header className="pt-6 xl:pt-3">
 
-        <section className="grid gap-3 pb-4 md:grid-cols-[1.2fr_0.8fr] xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)] xl:gap-4 xl:pb-[18px]">
-          <div className={`${shellClass} p-[22px] md:p-6 xl:px-[26px] xl:py-6`}>
+        <section className="grid gap-2.5 pb-3 md:grid-cols-[1.2fr_0.8fr] md:gap-3 md:pb-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)] xl:gap-4 xl:pb-[18px]">
+          <div className={`${shellClass} p-4 md:p-6 xl:px-[26px] xl:py-6`}>
             <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
               Painel de apresentacoes
             </p>
             <h1 className="max-w-[11ch] text-[clamp(1.4rem,2.5vw,2.2rem)] font-extrabold leading-[1.08] text-deep xl:text-[clamp(1.55rem,2vw,2.35rem)] xl:leading-[1.04]">
               Votação ao vivo para equipes em apresentação
             </h1>
-            <p className="mt-2.5 max-w-[52ch] text-[0.9rem] leading-[1.45] text-ash">
+            <p className="mt-2 max-w-[52ch] text-[0.9rem] leading-[1.45] text-ash md:mt-2.5">
               Plataforma oficial para avaliacao feito por{" "}
               <a
                 href="https://github.com/sawkjz"
@@ -541,7 +527,7 @@ export default function App() {
               </a>
               .
             </p>
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-2.5 flex flex-wrap gap-1.5 md:mt-3 md:gap-2">
               <a className={actionClass} href="#votar">
                 Votar agora
               </a>
@@ -552,7 +538,7 @@ export default function App() {
           </div>
 
           <aside
-            className={`${shellClass} bg-[linear-gradient(180deg,rgba(251,239,216,0.96),rgba(235,213,173,0.92))] p-4 xl:px-[18px] xl:py-4`}
+            className={`${shellClass} bg-[linear-gradient(180deg,rgba(251,239,216,0.96),rgba(235,213,173,0.92))] p-3.5 md:p-4 xl:px-[18px] xl:py-4`}
           >
             <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
               Status ao vivo
@@ -560,12 +546,12 @@ export default function App() {
             <h2 className="m-0 text-[1.08rem] font-bold leading-[1.08] text-deep xl:text-[1.18rem] xl:leading-[1.1]">
               Placar - Ficthon 2026
             </h2>
-            <ul className="mt-2.5 list-disc space-y-1 pl-4 text-[0.84rem] leading-[1.45] text-ash">
+            <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[0.84rem] leading-[1.45] text-ash md:mt-2.5 md:space-y-1">
               <li>Ranking de Gastronomia</li>
               <li>Soma de notas finais por equipe</li>
               <li>Animação de subida/queda</li>
             </ul>
-            <div className="mt-3 rounded-xl bg-deep/5 px-3 py-2.5 font-semibold text-deep">
+            <div className="mt-2.5 rounded-xl bg-deep/5 px-2.5 py-2 font-semibold text-deep md:mt-3 md:px-3 md:py-2.5">
               <p className="text-[0.78rem] text-ash">Disponibilidade</p>
               <strong className="text-[0.88rem]">{status}</strong>
             </div>
@@ -574,8 +560,8 @@ export default function App() {
       </header>
 
       <main>
-        <section className="mt-2 py-1" id="como-funciona">
-          <div className="mb-2.5 flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between xl:gap-[18px]">
+        <section className="mt-1.5 py-1" id="como-funciona">
+          <div className="mb-2 flex flex-col gap-1.5 md:mb-2.5 md:gap-2 xl:flex-row xl:items-end xl:justify-between xl:gap-[18px]">
             <div>
               <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
                 Como funciona
@@ -585,11 +571,11 @@ export default function App() {
               </h2>
             </div>
           </div>
-          <div className="grid gap-2.5 md:grid-cols-2 xl:gap-3">
+          <div className="grid gap-2 md:grid-cols-2 xl:gap-3">
             {heroHighlights.map((item) => (
               <article
                 key={item.title}
-                className={`${shellClass} p-3 xl:min-h-[112px]`}
+                className={`${shellClass} p-2.5 md:p-3 xl:min-h-[112px]`}
               >
                 <h3 className="mb-1 text-[0.96rem] font-bold text-deep">
                   {item.title}
@@ -602,8 +588,8 @@ export default function App() {
           </div>
         </section>
 
-        <section className="mt-2 py-1" id="cursos">
-          <div className="mb-2.5 flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between xl:gap-[18px]">
+        <section className="mt-1.5 py-1" id="cursos">
+          <div className="mb-2 flex flex-col gap-1.5 md:mb-2.5 md:gap-2 xl:flex-row xl:items-end xl:justify-between xl:gap-[18px]">
             <div>
               <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
                 Cursos
@@ -613,11 +599,11 @@ export default function App() {
               </h2>
             </div>
           </div>
-          <div className="grid gap-2.5 md:grid-cols-2 xl:gap-3">
+          <div className="grid gap-2 md:grid-cols-2 xl:gap-3">
             {gastronomyCourse && (
               <article
                 key={gastronomyCourse.id}
-                className={`${shellClass} p-3 xl:min-h-[112px]`}
+                className={`${shellClass} p-2.5 md:p-3 xl:min-h-[112px]`}
               >
                 <h3 className="mb-1 text-[0.96rem] font-bold text-deep">
                   {gastronomyCourse.name}
@@ -630,8 +616,8 @@ export default function App() {
           </div>
         </section>
 
-        <section className="mt-3 py-1" id="ranking">
-          <div className="mb-2.5 flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between xl:gap-[18px]">
+        <section className="mt-2 py-1" id="ranking">
+          <div className="mb-2 flex flex-col gap-1.5 md:mb-2.5 md:gap-2 xl:flex-row xl:items-end xl:justify-between xl:gap-[18px]">
             <div>
               <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
                 Ranking
@@ -641,8 +627,8 @@ export default function App() {
               </h2>
             </div>
           </div>
-          <div className={`${shellClass} p-3 xl:p-[14px]`}>
-            <div className="mb-2.5 xl:mb-3">
+          <div className={`${shellClass} p-2.5 md:p-3 xl:p-[14px]`}>
+            <div className="mb-2 md:mb-2.5 xl:mb-3">
               <span className="inline-flex rounded-full border border-transparent bg-sky/20 px-3 py-1.5 text-[0.8rem] font-semibold text-deep">
                 Gastronomia
               </span>
@@ -660,7 +646,7 @@ export default function App() {
 
   const renderAuth = () => (
     <div
-      className={`${shellClass} grid w-full max-w-[min(94vw,760px)] gap-[18px] p-[clamp(18px,4vw,32px)] text-left`}
+      className={`${shellClass} grid w-full max-w-[90vw] gap-3 p-3.5 text-left md:max-w-[min(94vw,760px)] md:gap-[18px] md:p-[clamp(18px,4vw,32px)]`}
     >
       <div className="grid gap-2">
         <h2 className="text-[1.5rem] font-bold text-deep">
@@ -670,8 +656,8 @@ export default function App() {
           Consulte rapidamente quem já votou e acompanhe o andamento da avaliação.
         </p>
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        <article className={`${shellClass} p-4`}>
+      <div className="grid gap-2.5 md:grid-cols-2 md:gap-3">
+        <article className={`${shellClass} p-3.5 md:p-4`}>
           <p className="text-[0.78rem] uppercase tracking-[0.14em] text-ash">
             Jurados com voto
           </p>
@@ -682,11 +668,11 @@ export default function App() {
             de {jurorsStatus.totalJurors} jurados cadastrados
           </span>
         </article>
-        <article className={`${shellClass} p-4`}>
+        <article className={`${shellClass} p-3.5 md:p-4`}>
           <p className="text-[0.78rem] uppercase tracking-[0.14em] text-ash">
             Ações rápidas
           </p>
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2.5 flex flex-wrap gap-1.5 md:mt-3 md:gap-2">
             <a className={actionClass} href="#votar">
               Ir para votação
             </a>
@@ -696,8 +682,8 @@ export default function App() {
           </div>
         </article>
       </div>
-      <div className={`${shellClass} grid gap-3 p-4`}>
-        <div className="flex items-center justify-between gap-3">
+      <div className={`${shellClass} grid gap-2.5 p-3.5 md:gap-3 md:p-4`}>
+        <div className="flex items-center justify-between gap-2.5 md:gap-3">
           <div>
             <h3 className="text-[1rem] font-bold text-deep">
               Registro dos jurados
@@ -726,8 +712,8 @@ export default function App() {
   );
 
   const renderVoting = () => (
-    <div className="mx-auto w-full max-w-[min(98vw,1320px)] px-[clamp(12px,2.6vw,34px)] py-[clamp(14px,2.8vw,30px)]">
-      <header className="flex flex-col items-start justify-between gap-4 pb-4 md:flex-row md:items-end">
+    <div className="mx-auto w-full max-w-[90vw] px-[18px] py-6 md:max-w-[min(98vw,1320px)] md:px-[clamp(12px,2.6vw,34px)] md:py-[clamp(14px,2.8vw,30px)]">
+      <header className="flex flex-col items-start justify-between gap-3 pb-3 md:gap-4 md:pb-4 md:flex-row md:items-end">
         <div>
           <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
             Painel de voto
@@ -746,9 +732,9 @@ export default function App() {
         </div>
       </header>
 
-      <main className="grid gap-4 xl:grid-cols-[minmax(0,1.28fr)_minmax(340px,0.92fr)]">
-        <section className="grid gap-4">
-          <div className={`${shellClass} grid gap-3 p-[18px]`}>
+      <main className="grid gap-3 md:gap-4 xl:grid-cols-[minmax(0,1.28fr)_minmax(340px,0.92fr)]">
+        <section className="grid gap-3 md:gap-4">
+          <div className={`${shellClass} grid gap-2.5 p-3.5 md:gap-3 md:p-[18px]`}>
             <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
               Curso
             </p>
@@ -759,12 +745,12 @@ export default function App() {
             </div>
           </div>
 
-          <div className={`${shellClass} grid gap-3 p-[18px]`}>
+          <div className={`${shellClass} grid gap-2.5 p-3.5 md:gap-3 md:p-[18px]`}>
             <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
               Jurado
             </p>
             <label className="grid gap-1.5 font-semibold text-deep">
-              Nome do jurado
+              Qual seu nome?
               <input
                 className="rounded-[14px] border border-[#8c6b45]/35 bg-[#fffaf0] px-3 py-2.5 text-[0.95rem] text-deep outline-none transition focus:border-[#9f763e]"
                 value={jurorName}
@@ -774,7 +760,7 @@ export default function App() {
             </label>
           </div>
 
-          <div className={`${shellClass} grid gap-3 p-[18px]`}>
+          <div className={`${shellClass} grid gap-2.5 p-3.5 md:gap-3 md:p-[18px]`}>
             <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
               Equipe
             </p>
@@ -816,7 +802,7 @@ export default function App() {
             )}
           </div>
 
-          <div className={`${shellClass} grid gap-3 p-[18px]`}>
+          <div className={`${shellClass} grid gap-2.5 p-3.5 md:gap-3 md:p-[18px]`}>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
@@ -898,7 +884,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className={`${shellClass} grid gap-3 p-[18px]`}>
+          <div className={`${shellClass} grid gap-2.5 p-3.5 md:gap-3 md:p-[18px]`}>
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
@@ -929,7 +915,7 @@ export default function App() {
 
         </section>
 
-        <aside className={`${shellClass} h-fit p-4 xl:sticky xl:top-4`}>
+        <aside className={`${shellClass} h-fit p-3 md:p-4 xl:sticky xl:top-4`}>
           <div className="mb-2">
             <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
               Ranking ao vivo
@@ -953,8 +939,8 @@ export default function App() {
   );
 
   const renderEvaluation = () => (
-    <div className="mx-auto w-full max-w-[min(98vw,1320px)] px-[clamp(12px,2.6vw,34px)] py-[clamp(14px,2.8vw,30px)]">
-      <header className="flex flex-col items-start justify-between gap-4 pb-4 md:flex-row md:items-end">
+    <div className="mx-auto w-full max-w-[90vw] px-[18px] py-6 md:max-w-[min(98vw,1320px)] md:px-[clamp(12px,2.6vw,34px)] md:py-[clamp(14px,2.8vw,30px)]">
+      <header className="flex flex-col items-start justify-between gap-3 pb-3 md:gap-4 md:pb-4 md:flex-row md:items-end">
         <div>
           <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
             Avaliacao
@@ -973,8 +959,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
-        <section className={`${shellClass} grid gap-3 p-[18px]`}>
+      <main className="grid gap-3 md:gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
+        <section className={`${shellClass} grid gap-2.5 p-3.5 md:gap-3 md:p-[18px]`}>
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="text-[9px] uppercase tracking-[0.16em] text-ash">
@@ -1001,11 +987,6 @@ export default function App() {
               {loadError}
             </p>
           )}
-          {!loadingVote && !loadError && selectedTeamId && !existingVote && (
-            <p className="text-[0.9rem] text-ash">
-              Nenhuma avaliacao anterior encontrada. Preencha e salve normalmente.
-            </p>
-          )}
           <form className="grid gap-3" onSubmit={handleVoteSubmit}>
             {bootstrap.criteria.map((criterion, index) => (
               <div
@@ -1018,9 +999,6 @@ export default function App() {
                     <small className="text-[0.85rem] font-normal text-ash">
                       {criterion.question}
                     </small>
-                  </span>
-                  <span className="rounded-full bg-sky/15 px-2.5 py-1 text-[0.78rem] font-bold text-deep">
-                    Nota {scores[criterion.id] ?? criterion.min}
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -1111,7 +1089,7 @@ export default function App() {
                     Resetar avaliacao salva?
                   </h4>
                   <p className="mt-2 text-[0.92rem] leading-[1.5] text-ash">
-                    Essa acao apaga a avaliacao desta equipe no banco e atualiza o ranking ao vivo.
+                    Essa ação apaga a avaliação desta equipe no banco e atualiza o ranking ao vivo.
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
@@ -1136,7 +1114,7 @@ export default function App() {
             )}
         </section>
 
-        <aside className={`${shellClass} h-fit p-4 xl:sticky xl:top-4`}>
+        <aside className={`${shellClass} h-fit p-3 md:p-4 xl:sticky xl:top-4`}>
           <div className="mb-2">
             <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
               Ranking ao vivo
@@ -1171,7 +1149,7 @@ export default function App() {
     return <VintageFrame>{renderEvaluation()}</VintageFrame>;
   }
 
-  return <VintageFrame>{renderLanding()}</VintageFrame>;
+  return <VintageFrame showLandingChef>{renderLanding()}</VintageFrame>;
 }
 
 function RankingList({ items, loading, nodesRef, showVotes = false }) {
@@ -1273,58 +1251,23 @@ function JurorsStatusList({ jurors, loading }) {
   );
 }
 
-function VintageFrame({ children, centerContent = false }) {
+function VintageFrame({ children, centerContent = false, showLandingChef = false }) {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#e8dcc3] font-sans text-[15px] text-deep">
-      <img
-        alt=""
-        aria-hidden="true"
-        src="/img/vintage_background_1920x1080.png"
-        className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
-      />
+    <div className="relative min-h-screen overflow-hidden bg-[#e8dcc3] font-sans text-[14px] text-deep md:text-[15px]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(238,223,193,0.42),rgba(232,216,186,0.6))]" />
       <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:repeating-linear-gradient(25deg,rgba(117,84,40,0.08)_0,rgba(117,84,40,0.08)_1px,transparent_1px,transparent_6px)]" />
 
-      <img
-        alt=""
-        aria-hidden="true"
-        src="/img/Chef%20at%20work%20with%20fresh%20ingredients.png"
-        className="pointer-events-none absolute bottom-[-23px] right-0 z-50 w-[clamp(160px,23vw,420px)] max-w-[42vw] object-contain opacity-95"
-      />
-      <img
-        alt=""
-        aria-hidden="true"
-        src="/img/Grilled%20steak%20with%20tomato%20and%20veggies.png"
-        className="pointer-events-none absolute left-0 top-0 z-40 w-[clamp(170px,24vw,360px)] max-w-[34vw] object-contain opacity-95"
-      />
-
-      <img
-        alt=""
-        aria-hidden="true"
-        src="/ornament-corner.svg"
-        className="pointer-events-none absolute -left-10 -top-10 hidden w-[min(22vw,250px)] opacity-70 sm:block"
-      />
-      <img
-        alt=""
-        aria-hidden="true"
-        src="/ornament-corner.svg"
-        className="pointer-events-none absolute -right-10 -top-10 hidden w-[min(22vw,250px)] rotate-90 opacity-65 sm:block"
-      />
-      <img
-        alt=""
-        aria-hidden="true"
-        src="/ornament-vine.svg"
-        className="pointer-events-none absolute -left-8 bottom-6 hidden w-[min(16vw,170px)] opacity-45 lg:block"
-      />
-      <img
-        alt=""
-        aria-hidden="true"
-        src="/ornament-vine.svg"
-        className="pointer-events-none absolute -right-8 bottom-8 hidden w-[min(16vw,170px)] -scale-x-100 opacity-45 lg:block"
-      />
+      {showLandingChef && (
+        <img
+          alt=""
+          aria-hidden="true"
+          src="/img/Chef%20at%20work%20with%20fresh%20ingredients.png"
+          className="pointer-events-none absolute bottom-[-23px] right-0 z-50 w-[clamp(160px,23vw,420px)] max-w-[42vw] object-contain opacity-95"
+        />
+      )}
 
       <div
-        className={`relative z-10 mx-auto w-full max-w-[min(98vw,1360px)] px-[clamp(10px,2.5vw,30px)] py-[clamp(14px,3vw,36px)] ${
+        className={`relative z-10 mx-auto w-full max-w-[94vw] px-0 py-3 md:max-w-[min(98vw,1360px)] md:px-[clamp(10px,2.5vw,30px)] md:py-[clamp(14px,3vw,36px)] ${
           centerContent ? "grid min-h-screen place-items-center" : ""
         }`}
       >

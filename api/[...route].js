@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
-import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -63,6 +63,15 @@ const teamOrder = new Map(
 );
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const TIME_CRITERION_TITLE = "Tempo";
+const SCHEMA_DEBUG_TTL_MS = 60 * 1000;
+const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
+
+let schemaDebugCache = {
+  checkedAt: null,
+  ok: false,
+  errors: [],
+  warnings: [],
+};
 
 const hashPassword = (password) => {
   const salt = randomBytes(16).toString("hex");
@@ -122,6 +131,360 @@ const requireSupabase = (res) => {
     return false;
   }
   return true;
+};
+
+const isMissingFunctionError = (error) =>
+  String(error?.message ?? "").toLowerCase().includes("could not find the function");
+
+const runSchemaDebugCheck = async () => {
+  const checkedAt = new Date().toISOString();
+  if (!supabase) {
+    return {
+      checkedAt,
+      ok: false,
+      errors: ["Supabase nao configurado"],
+      warnings: [],
+    };
+  }
+
+  const errors = [];
+  const warnings = [];
+
+  const checks = [
+    { label: "votes core columns", table: "votes", select: "id, user_id, team_id, category, presentation_time_seconds, time_penalty, base_score, final_score" },
+    { label: "vote_scores core columns", table: "vote_scores", select: "id, vote_id, criterion_id, score" },
+    { label: "teams core columns", table: "teams", select: "id, course_id, name" },
+    { label: "criteria core columns", table: "criteria", select: "id, title, min, max, sort_order" },
+  ];
+
+  for (const check of checks) {
+    const { error } = await supabase.from(check.table).select(check.select).limit(1);
+    if (error) {
+      errors.push(`${check.label}: ${error.message}`);
+    }
+  }
+
+  const { error: usersError } = await supabase
+    .from("app_users")
+    .select("id, full_name")
+    .limit(1);
+  if (usersError) {
+    warnings.push(`app_users indisponivel: ${usersError.message}`);
+  }
+
+  const submitVoteCheck = await supabase.rpc("submit_vote", {
+    p_user_id: ZERO_UUID,
+    p_team_id: ZERO_UUID,
+    p_category: GASTRONOMY_CATEGORY,
+    p_presentation_time_seconds: 0,
+    p_scores: [],
+  });
+  if (submitVoteCheck.error && isMissingFunctionError(submitVoteCheck.error)) {
+    errors.push(`funcao submit_vote ausente: ${submitVoteCheck.error.message}`);
+  }
+
+  const rankingCheck = await supabase.rpc("get_ranking", {
+    p_course_id: "0",
+    p_category: GASTRONOMY_CATEGORY,
+  });
+  if (rankingCheck.error && isMissingFunctionError(rankingCheck.error)) {
+    errors.push(`funcao get_ranking ausente: ${rankingCheck.error.message}`);
+  }
+
+  return {
+    checkedAt,
+    ok: errors.length === 0,
+    errors,
+    warnings,
+  };
+};
+
+const getSchemaDebug = async (force = false) => {
+  const lastCheckMs = schemaDebugCache.checkedAt
+    ? Date.parse(schemaDebugCache.checkedAt)
+    : 0;
+  const isFresh =
+    !force &&
+    Number.isFinite(lastCheckMs) &&
+    Date.now() - lastCheckMs < SCHEMA_DEBUG_TTL_MS;
+
+  if (isFresh) {
+    return schemaDebugCache;
+  }
+
+  schemaDebugCache = await runSchemaDebugCheck();
+  return schemaDebugCache;
+};
+
+const isMissingVotesCategoryError = (error) => {
+  const message = String(error?.message ?? "").toLowerCase();
+  const details = String(error?.details ?? "").toLowerCase();
+  return (
+    message.includes("votes.category") ||
+    message.includes("column") && message.includes("category") ||
+    details.includes("votes.category")
+  );
+};
+
+const isMissingTableError = (error, tableName) => {
+  const message = String(error?.message ?? "").toLowerCase();
+  return message.includes(`public.${String(tableName).toLowerCase()}`);
+};
+
+const hasMissingCategoryConstraint = (error) => {
+  const message = String(error?.message ?? "").toLowerCase();
+  return (
+    message.includes("function submit_vote") ||
+    message.includes("function public.submit_vote") ||
+    message.includes("does not exist")
+  );
+};
+
+const isInvalidInputSyntaxError = (error) => {
+  const message = String(error?.message ?? "").toLowerCase();
+  return message.includes("invalid input syntax for type");
+};
+
+const isUuid = (value) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value ?? "").trim(),
+  );
+
+const jurorNameToDeterministicBigint = (fullName) => {
+  const normalized = String(fullName ?? "").trim().toLowerCase();
+  const hex = createHash("sha256").update(normalized).digest("hex").slice(0, 15);
+  return BigInt(`0x${hex}`).toString();
+};
+
+const jurorNameToDeterministicUuid = (fullName) => {
+  const normalized = String(fullName ?? "").trim().toLowerCase();
+  const hex = createHash("sha256").update(normalized).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+};
+
+const fetchLatestVoteByUserAndTeam = async ({
+  userId,
+  fallbackUserId = null,
+  teamId,
+  category = GASTRONOMY_CATEGORY,
+}) => {
+  let query = supabase
+    .from("votes")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("team_id", teamId)
+    .order("updated_at", { ascending: false })
+    .limit(1);
+
+  if (category) {
+    query = query.eq("category", String(category).toLowerCase());
+  }
+
+  let { data, error } = await query;
+
+  if (error && category && isMissingVotesCategoryError(error)) {
+    const fallback = await supabase
+      .from("votes")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("team_id", teamId)
+      .order("updated_at", { ascending: false })
+      .limit(1);
+    data = fallback.data;
+    error = fallback.error;
+  }
+
+  if (
+    error &&
+    isInvalidInputSyntaxError(error) &&
+    fallbackUserId &&
+    String(fallbackUserId) !== String(userId)
+  ) {
+    return fetchLatestVoteByUserAndTeam({
+      userId: fallbackUserId,
+      fallbackUserId: null,
+      teamId,
+      category,
+    });
+  }
+
+  if (error) {
+    throw error;
+  }
+
+  return data?.[0] ?? null;
+};
+
+const computeTimePenalty = (presentationTimeSeconds) => {
+  const timeSeconds = Math.max(0, Math.floor(Number(presentationTimeSeconds) || 0));
+  const minSeconds = 180;
+  const maxSeconds = 300;
+  const stepSeconds = 30;
+  if (timeSeconds >= minSeconds && timeSeconds <= maxSeconds) return 0;
+  if (timeSeconds < minSeconds) {
+    return Math.floor((minSeconds - timeSeconds) / stepSeconds) * 0.1;
+  }
+  return Math.floor((timeSeconds - maxSeconds) / stepSeconds) * 0.1;
+};
+
+const saveVoteWithoutRpc = async ({
+  userId,
+  fallbackUserId = null,
+  teamId,
+  category,
+  presentationTimeSeconds,
+  scores,
+}) => {
+  const baseScore = scores.reduce((acc, entry) => acc + Number(entry.score || 0), 0);
+  const timePenalty = computeTimePenalty(presentationTimeSeconds);
+  const finalScore = Math.max(0, Number((baseScore - timePenalty).toFixed(1)));
+  const normalizedCategory = String(category ?? GASTRONOMY_CATEGORY).toLowerCase();
+
+  const fullPayload = {
+    user_id: userId,
+    team_id: teamId,
+    category: normalizedCategory,
+    presentation_time_seconds: Math.max(0, Math.floor(Number(presentationTimeSeconds) || 0)),
+    time_penalty: timePenalty,
+    base_score: baseScore,
+    final_score: finalScore,
+  };
+
+  const simplePayload = {
+    user_id: userId,
+    team_id: teamId,
+  };
+
+  let voteId = null;
+  let lastError = null;
+
+  let upsertFull = await supabase
+    .from("votes")
+    .upsert(fullPayload, { onConflict: "user_id,team_id,category" })
+    .select("id")
+    .maybeSingle();
+  lastError = upsertFull.error ?? lastError;
+
+  if (
+    upsertFull.error &&
+    isInvalidInputSyntaxError(upsertFull.error) &&
+    fallbackUserId &&
+    String(fallbackUserId) !== String(userId)
+  ) {
+    return saveVoteWithoutRpc({
+      userId: fallbackUserId,
+      fallbackUserId: null,
+      teamId,
+      category,
+      presentationTimeSeconds,
+      scores,
+    });
+  }
+
+  if (!upsertFull.error && upsertFull.data?.id) {
+    voteId = upsertFull.data.id;
+  } else {
+    const upsertSimple = await supabase
+      .from("votes")
+      .upsert(simplePayload, { onConflict: "user_id,team_id" })
+      .select("id")
+      .maybeSingle();
+    lastError = upsertSimple.error ?? lastError;
+
+    if (!upsertSimple.error && upsertSimple.data?.id) {
+      voteId = upsertSimple.data.id;
+    } else {
+      const insertSimple = await supabase
+        .from("votes")
+        .insert(simplePayload)
+        .select("id")
+        .maybeSingle();
+      lastError = insertSimple.error ?? lastError;
+
+      if (!insertSimple.error && insertSimple.data?.id) {
+        voteId = insertSimple.data.id;
+      }
+
+      const existing = await fetchLatestVoteByUserAndTeam({
+        userId,
+        fallbackUserId,
+        teamId,
+        category: normalizedCategory,
+      });
+      voteId = voteId ?? existing?.id ?? null;
+    }
+  }
+
+  if (!voteId) {
+    const detail = String(lastError?.message ?? "").trim();
+    throw new Error(
+      detail
+        ? `Falha ao salvar voto sem RPC: ${detail}`
+        : "Falha ao salvar voto sem RPC",
+    );
+  }
+
+  const deleteScores = await supabase
+    .from("vote_scores")
+    .delete()
+    .eq("vote_id", voteId);
+
+  if (deleteScores.error) {
+    throw deleteScores.error;
+  }
+
+  const scoreRows = scores.map((entry) => ({
+    vote_id: voteId,
+    criterion_id: entry.criterionId,
+    score: Number(entry.score),
+  }));
+
+  if (scoreRows.length > 0) {
+    const insertScores = await supabase
+      .from("vote_scores")
+      .insert(scoreRows);
+    if (insertScores.error) {
+      throw insertScores.error;
+    }
+  }
+};
+
+const resolveJurorByName = async (fullName) => {
+  const normalizedFullName = String(fullName ?? "").trim();
+  if (!normalizedFullName) {
+    throw new Error("Nome do jurado obrigatorio");
+  }
+
+  const { data: juror, error } = await supabase
+    .from("app_users")
+    .select("id, full_name")
+    .eq("full_name", normalizedFullName)
+    .maybeSingle();
+
+    if (error) {
+      if (isMissingTableError(error, "app_users")) {
+        return {
+        id: jurorNameToDeterministicUuid(normalizedFullName),
+        fallback_user_id: null,
+        full_name: normalizedFullName,
+        fromFallback: true,
+      };
+    }
+    throw error;
+  }
+
+  if (!juror?.id) {
+    return null;
+  }
+
+  return {
+    ...juror,
+    id: isUuid(juror.id)
+      ? juror.id
+      : jurorNameToDeterministicUuid(normalizedFullName),
+    fallback_user_id: isUuid(juror.id) ? null : String(juror.id),
+    fromFallback: false,
+  };
 };
 
 const getGastronomyCourse = async () => {
@@ -206,17 +569,13 @@ const findOrCreateJuror = async (fullName) => {
     throw new Error("Nome do jurado obrigatorio");
   }
 
-  const { data: existing, error: existingError } = await supabase
-    .from("app_users")
-    .select("id, full_name")
-    .eq("full_name", normalizedFullName)
-    .maybeSingle();
-
-  if (existingError) {
-    throw existingError;
+  const existing = await resolveJurorByName(normalizedFullName);
+  if (existing?.id) {
+    return existing;
   }
 
-  if (existing) {
+  // Fallback para schema legado sem tabela app_users.
+  if (existing?.fromFallback) {
     return existing;
   }
 
@@ -450,10 +809,18 @@ app.get("/ranking", async (_req, res) => {
     return;
   }
 
-  const { data, error } = await supabase.rpc("get_ranking", {
+  let { data, error } = await supabase.rpc("get_ranking", {
     p_course_id: String(course.id),
     p_category: GASTRONOMY_CATEGORY,
   });
+
+  if (error && String(error.message ?? "").includes("function get_ranking")) {
+    const fallback = await supabase.rpc("get_ranking", {
+      p_course_id: course.id,
+    });
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     res.status(500).json({ error: error.message });
@@ -489,25 +856,55 @@ app.get("/jurors/status", async (_req, res) => {
   try {
     if (!requireSupabase(res)) return;
 
-    const { data, error } = await supabase
+    const { data: users, error: usersError } = await supabase
       .from("app_users")
-      .select("id, full_name, votes(team_id)")
+      .select("id, full_name")
       .order("full_name");
 
-    if (error) {
-      console.error("[/jurors/status] Error:", error);
+    if (usersError && !isMissingTableError(usersError, "app_users")) {
+      console.error("[/jurors/status] Users error:", usersError);
       res.status(500).json({
         error: "Falha ao carregar jurados",
-        ...(isDev ? { detail: error.message } : {}),
+        ...(isDev ? { detail: usersError.message } : {}),
       });
       return;
     }
 
-    const jurors = (data ?? []).map((juror) => ({
+    const { data: votes, error: votesError } = await supabase
+      .from("votes")
+      .select("user_id");
+
+    if (votesError) {
+      console.error("[/jurors/status] Votes error:", votesError);
+      res.status(500).json({
+        error: "Falha ao carregar jurados",
+        ...(isDev ? { detail: votesError.message } : {}),
+      });
+      return;
+    }
+
+    const voteCountsByUserId = new Map();
+    (votes ?? []).forEach((vote) => {
+      const key = String(vote.user_id);
+      voteCountsByUserId.set(key, (voteCountsByUserId.get(key) ?? 0) + 1);
+    });
+
+    // Em schema legado sem app_users, reporta contagens sem quebrar a tela.
+    if (usersError && isMissingTableError(usersError, "app_users")) {
+      const distinctJurors = voteCountsByUserId.size;
+      res.json({
+        jurors: [],
+        totalJurors: distinctJurors,
+        votedJurors: distinctJurors,
+      });
+      return;
+    }
+
+    const jurors = (users ?? []).map((juror) => ({
       id: juror.id,
       full_name: juror.full_name,
-      has_voted: Boolean(juror.votes?.length),
-      total_votes: juror.votes?.length ?? 0,
+      has_voted: (voteCountsByUserId.get(String(juror.id)) ?? 0) > 0,
+      total_votes: voteCountsByUserId.get(String(juror.id)) ?? 0,
     }));
 
     res.json({
@@ -535,8 +932,9 @@ app.post("/votes", async (req, res) => {
       category = GASTRONOMY_CATEGORY,
       presentationTimeSeconds,
     } = req.body ?? {};
+    const normalizedTeamId = String(teamId ?? "").trim();
     if (
-      !teamId ||
+      !normalizedTeamId ||
       !Array.isArray(scores) ||
       !String(jurorName ?? "").trim() ||
       !Number.isFinite(Number(presentationTimeSeconds))
@@ -567,7 +965,7 @@ app.post("/votes", async (req, res) => {
     const { data: team, error: teamError } = await supabase
       .from("teams")
       .select("id, name, course_id")
-      .eq("id", teamId)
+      .eq("id", normalizedTeamId)
       .maybeSingle();
 
     if (teamError) {
@@ -598,37 +996,133 @@ app.post("/votes", async (req, res) => {
       return;
     }
 
-    const { error } = await supabase.rpc("submit_vote", {
-      p_user_id: juror.id,
-      p_team_id: teamId,
-      p_category: normalizedCategory,
-      p_presentation_time_seconds: Math.max(
-        0,
-        Math.floor(Number(presentationTimeSeconds)),
-      ),
-      p_scores: scores.map((entry) => ({
-        criterionId: entry.criterionId,
-        score: Number(entry.score),
-      })),
-    });
+    let error = null;
+    const canUseUuidRpc = isUuid(juror.id) && isUuid(teamId);
+
+    if (canUseUuidRpc) {
+      const rpcResult = await supabase.rpc("submit_vote", {
+        p_user_id: juror.id,
+        p_team_id: normalizedTeamId,
+        p_category: normalizedCategory,
+        p_presentation_time_seconds: Math.max(
+          0,
+          Math.floor(Number(presentationTimeSeconds)),
+        ),
+        p_scores: scores.map((entry) => ({
+          criterionId: entry.criterionId,
+          score: Number(entry.score),
+        })),
+      });
+      error = rpcResult.error;
+    } else {
+      error = { message: "submit_vote skipped due to non-uuid identifiers" };
+    }
+
+    if (
+      error &&
+      isInvalidInputSyntaxError(error) &&
+      juror.fallback_user_id
+    ) {
+      const typedFallback = await supabase.rpc("submit_vote", {
+        p_user_id: juror.fallback_user_id,
+        p_team_id: normalizedTeamId,
+        p_category: normalizedCategory,
+        p_presentation_time_seconds: Math.max(
+          0,
+          Math.floor(Number(presentationTimeSeconds)),
+        ),
+        p_scores: scores.map((entry) => ({
+          criterionId: entry.criterionId,
+          score: Number(entry.score),
+        })),
+      });
+      error = typedFallback.error;
+    }
+
+    if (error && hasMissingCategoryConstraint(error)) {
+      let fallback = await supabase.rpc("submit_vote", {
+        p_user_id: juror.id,
+        p_team_id: normalizedTeamId,
+        p_scores: scores.map((entry) => ({
+          criterionId: entry.criterionId,
+          score: Number(entry.score),
+        })),
+      });
+      if (
+        fallback.error &&
+        isInvalidInputSyntaxError(fallback.error) &&
+        juror.fallback_user_id
+      ) {
+        fallback = await supabase.rpc("submit_vote", {
+          p_user_id: juror.fallback_user_id,
+          p_team_id: normalizedTeamId,
+          p_scores: scores.map((entry) => ({
+            criterionId: entry.criterionId,
+            score: Number(entry.score),
+          })),
+        });
+      }
+      error = fallback.error;
+    }
+
+    if (error && String(error.message ?? "").includes("submit_vote")) {
+      try {
+        await saveVoteWithoutRpc({
+          userId: juror.id,
+          fallbackUserId: juror.fallback_user_id ?? null,
+          teamId: normalizedTeamId,
+          category: normalizedCategory,
+          presentationTimeSeconds,
+          scores,
+        });
+        error = null;
+      } catch (fallbackError) {
+        error = fallbackError;
+      }
+    }
 
     if (error) {
       console.error("[/votes] Submit vote error:", error);
-      res.status(500).json({ error: error.message });
+      const schemaDebug = isDev ? await getSchemaDebug() : undefined;
+      if (
+        String(error?.code ?? "") === "23503" &&
+        String(error?.details ?? "").includes('table "users"')
+      ) {
+        res.status(500).json({
+          error:
+            "Nao foi possivel salvar voto neste schema: a tabela users exigida pela FK nao esta disponivel pela API.",
+          ...(isDev ? { schemaDebug } : {}),
+        });
+        return;
+      }
+      if (String(error?.message ?? "").includes("Falha ao salvar voto sem RPC")) {
+        res.status(500).json({
+          error:
+            "Nao foi possivel salvar voto por incompatibilidade de schema no banco. Rode o schema/migrations atuais no Supabase.",
+          ...(isDev ? { schemaDebug } : {}),
+        });
+        return;
+      }
+      res.status(500).json({
+        error: error.message,
+        ...(isDev ? { schemaDebug } : {}),
+      });
       return;
     }
 
-    const { data: savedVote, error: savedVoteError } = await supabase
-      .from("votes")
-      .select(
-        "id, user_id, team_id, category, presentation_time_seconds, time_penalty, base_score, final_score, updated_at",
-      )
-      .eq("user_id", juror.id)
-      .eq("team_id", teamId)
-      .eq("category", normalizedCategory)
-      .maybeSingle();
+    let savedVote = null;
+    try {
+      savedVote = await fetchLatestVoteByUserAndTeam({
+        userId: juror.id,
+        fallbackUserId: juror.fallback_user_id ?? null,
+        teamId: normalizedTeamId,
+        category: normalizedCategory,
+      });
+    } catch (_error) {
+      savedVote = null;
+    }
 
-    if (savedVoteError || !savedVote) {
+    if (!savedVote) {
       res.status(201).json({ ok: true });
       return;
     }
@@ -639,9 +1133,11 @@ app.post("/votes", async (req, res) => {
     });
   } catch (error) {
     console.error("[/votes] Unexpected error:", error);
+    const schemaDebug = isDev ? await getSchemaDebug() : undefined;
     res.status(500).json({
       error: "Erro ao salvar voto",
       ...(isDev ? { detail: error.message } : {}),
+      ...(isDev ? { schemaDebug } : {}),
     });
   }
 });
@@ -659,13 +1155,10 @@ app.get("/votes/current", async (req, res) => {
       return;
     }
 
-    const { data: juror, error: jurorError } = await supabase
-      .from("app_users")
-      .select("id, full_name")
-      .eq("full_name", jurorName)
-      .maybeSingle();
-
-    if (jurorError) {
+    let juror;
+    try {
+      juror = await resolveJurorByName(jurorName);
+    } catch (jurorError) {
       res.status(500).json({ error: "Falha ao carregar jurado" });
       return;
     }
@@ -675,22 +1168,44 @@ app.get("/votes/current", async (req, res) => {
       return;
     }
 
-    const { data: vote, error: voteError } = await supabase
-      .from("votes")
-      .select(
-        "id, user_id, team_id, category, presentation_time_seconds, time_penalty, base_score, final_score, vote_scores(criterion_id, score)",
-      )
-      .eq("user_id", juror.id)
-      .eq("team_id", teamId)
-      .eq("category", category)
-      .maybeSingle();
-
-    if (voteError) {
+    let vote;
+    try {
+      vote = await fetchLatestVoteByUserAndTeam({
+        userId: juror.id,
+        fallbackUserId: juror.fallback_user_id ?? null,
+        teamId,
+        category,
+      });
+    } catch (voteError) {
+      if (isInvalidInputSyntaxError(voteError)) {
+        res.json({ vote: null });
+        return;
+      }
       res.status(500).json({ error: "Falha ao carregar avaliacao" });
       return;
     }
 
-    res.json({ vote: vote ?? null });
+    if (!vote?.id) {
+      res.json({ vote: null });
+      return;
+    }
+
+    const { data: voteScores, error: voteScoresError } = await supabase
+      .from("vote_scores")
+      .select("criterion_id, score")
+      .eq("vote_id", vote.id);
+
+    if (voteScoresError) {
+      res.status(500).json({ error: "Falha ao carregar notas da avaliacao" });
+      return;
+    }
+
+    res.json({
+      vote: {
+        ...vote,
+        vote_scores: voteScores ?? [],
+      },
+    });
   } catch (error) {
     res.status(500).json({
       error: "Erro ao carregar avaliacao",
@@ -713,13 +1228,10 @@ app.delete("/votes", async (req, res) => {
       return;
     }
 
-    const { data: juror, error: jurorError } = await supabase
-      .from("app_users")
-      .select("id")
-      .eq("full_name", normalizedJurorName)
-      .maybeSingle();
-
-    if (jurorError) {
+    let juror;
+    try {
+      juror = await resolveJurorByName(normalizedJurorName);
+    } catch (jurorError) {
       res.status(500).json({ error: "Falha ao localizar jurado" });
       return;
     }
@@ -729,14 +1241,37 @@ app.delete("/votes", async (req, res) => {
       return;
     }
 
-    const { error } = await supabase
+    let deleteWithCategory = await supabase
       .from("votes")
       .delete()
       .eq("user_id", juror.id)
       .eq("team_id", normalizedTeamId)
       .eq("category", normalizedCategory);
 
-    if (error) {
+    let deleteError = deleteWithCategory.error;
+    if (
+      deleteError &&
+      isInvalidInputSyntaxError(deleteError) &&
+      juror.fallback_user_id
+    ) {
+      deleteWithCategory = await supabase
+        .from("votes")
+        .delete()
+        .eq("user_id", juror.fallback_user_id)
+        .eq("team_id", normalizedTeamId)
+        .eq("category", normalizedCategory);
+      deleteError = deleteWithCategory.error;
+    }
+    if (deleteError && isMissingVotesCategoryError(deleteError)) {
+      const fallbackDelete = await supabase
+        .from("votes")
+        .delete()
+        .eq("user_id", juror.fallback_user_id ?? juror.id)
+        .eq("team_id", normalizedTeamId);
+      deleteError = fallbackDelete.error;
+    }
+
+    if (deleteError) {
       res.status(500).json({ error: "Falha ao resetar avaliacao" });
       return;
     }
@@ -761,6 +1296,12 @@ if (isDev) {
       port,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  app.get("/debug/schema", async (req, res) => {
+    const force = String(req.query.recheck ?? "").toLowerCase() === "true";
+    const snapshot = await getSchemaDebug(force);
+    res.json(snapshot);
   });
 }
 
