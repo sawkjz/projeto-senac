@@ -7,6 +7,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 const app = express();
 const port = process.env.PORT || 3001;
 const isDev = process.env.NODE_ENV !== "production";
+const apiBaseUrl = process.env.API_BASE_URL || process.env.VITE_API_BASE_URL || "/api";
 
 // CORS configurado para aceitar requisições de qualquer origem
 app.use(cors({
@@ -1290,6 +1291,7 @@ if (isDev) {
   app.get("/debug/config", (_req, res) => {
     res.json({
       isDev,
+      apiBaseUrl,
       supabaseConfigured: Boolean(supabase),
       supabaseUrl: supabaseUrl ? "✓ Configurado" : "✗ Ausente",
       supabaseKey: supabaseServiceKey ? "✓ Configurado" : "✗ Ausente",
