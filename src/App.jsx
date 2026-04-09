@@ -32,7 +32,6 @@ const GASTRONOMY_CATEGORY = "gastronomia";
 const TIME_MIN_SECONDS = 3 * 60;
 const TIME_MAX_SECONDS = 5 * 60;
 const TIMER_PENALTY_STEP_SECONDS = 30;
-const BUILD_LABEL = "build d6a46fc";
 
 const scoreLabels = (criterion) => `${criterion.min} - ${criterion.max}`;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -1263,9 +1262,6 @@ function VintageFrame({ children, centerContent = false, showLandingChef = false
       />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(238,223,193,0.42),rgba(232,216,186,0.6))]" />
       <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:repeating-linear-gradient(25deg,rgba(117,84,40,0.08)_0,rgba(117,84,40,0.08)_1px,transparent_1px,transparent_6px)]" />
-      <div className="fixed bottom-3 left-3 z-[120] rounded-full border border-[#8d6a41]/45 bg-[rgba(255,248,232,0.92)] px-3 py-1 text-[0.72rem] font-bold uppercase tracking-[0.24em] text-[#6f4f25] shadow-[0_8px_18px_rgba(58,35,12,0.16)] backdrop-blur-sm">
-        {BUILD_LABEL}
-      </div>
 
       {showLandingChef && (
         <img
