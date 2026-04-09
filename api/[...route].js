@@ -18,6 +18,18 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Na Vercel as requisições chegam com prefixo /api; em desenvolvimento local
+// o app roda na raiz em localhost:3001. Removemos o prefixo apenas em produção
+// para que as mesmas rotas Express funcionem nos dois ambientes.
+app.use((req, _res, next) => {
+  if (!isDev && req.url.startsWith("/api/")) {
+    req.url = req.url.replace(/^\/api/, "") || "/";
+  } else if (!isDev && req.url === "/api") {
+    req.url = "/";
+  }
+  next();
+});
+
 // Middleware de logging
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
