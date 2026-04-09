@@ -1333,4 +1333,6 @@ ${!supabase ? "⚠️  Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no .en
   });
 }
 
-export default app;
+export default function handler(req, res) {
+  return app(req, res);
+}
