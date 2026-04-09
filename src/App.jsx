@@ -504,10 +504,10 @@ export default function App() {
   }, [selectedTeamId, displayedTeams]);
 
   const renderLanding = () => (
-    <div className="mx-auto w-full max-w-[90vw] px-[20px] pb-3 md:max-w-[min(96vw,1180px)] md:px-[clamp(12px,2.6vw,34px)] md:pb-[clamp(16px,3vw,30px)]">
-      <header className="pt-6 xl:pt-3">
+    <div className="mx-auto w-full max-w-[92vw] px-[20px] pb-3 md:max-w-[min(96vw,1180px)] md:px-[clamp(12px,2.6vw,34px)] md:pb-[clamp(16px,3vw,30px)]">
+      <header className="pt-6 xl:pt-[3rem]">
 
-        <section className="grid gap-2.5 pb-3 md:grid-cols-[1.2fr_0.8fr] md:gap-3 md:pb-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)] xl:gap-4 xl:pb-[18px]">
+        <section className="grid gap-2.5 pb-3 md:grid-cols-[1.2fr_0.8fr] md:gap-3 md:pb-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)] xl:gap-4 xl:pb-[22px]">
           <div className={`${shellClass} p-4 md:p-6 xl:px-[26px] xl:py-6`}>
             <p className="mb-1.5 text-[9px] uppercase tracking-[0.16em] text-ash">
               Painel de apresentacoes
@@ -1254,6 +1254,12 @@ function JurorsStatusList({ jurors, loading }) {
 function VintageFrame({ children, centerContent = false, showLandingChef = false }) {
   return (
     <div className="relative min-h-screen overflow-hidden bg-[#e8dcc3] font-sans text-[14px] text-deep md:text-[15px]">
+      <img
+        alt=""
+        aria-hidden="true"
+        src="/img/vintage_background_1920x1080.png"
+        className="pointer-events-none absolute inset-0 hidden h-full w-full object-cover object-center md:block"
+      />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(238,223,193,0.42),rgba(232,216,186,0.6))]" />
       <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:repeating-linear-gradient(25deg,rgba(117,84,40,0.08)_0,rgba(117,84,40,0.08)_1px,transparent_1px,transparent_6px)]" />
 
