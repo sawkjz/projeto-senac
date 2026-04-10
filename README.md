@@ -1,4 +1,4 @@
-# projeto-senac
+# <em>Votação ao Vivo - Ficthon 2026<em>
 
 Sistema de votacao ao vivo para apresentacoes de equipes de Gastronomia, com ranking em tempo real.
 
